@@ -12,6 +12,17 @@ a known defect, and record below what retires it.
 `0002` and `0003` are the reason this package exists, so unlike the others they are not waiting to
 be retired — they are waiting to be upstreamed. Both are inert on an archival node.
 
+**Not carried yet: the BLAKE2b header-v2 type.** [pruned-electrs](https://github.com/paulscode/pruned-electrs)
+carries it as its `patches/0003`, but it is dead code — it adds `HeaderV2`, `AnyHeader` and a
+`blake2b_simd` dependency, and nothing calls them. Carrying it here would grow the image and force a
+rebuild for no behaviour change. It belongs in this package when the substitution across
+`chain`/`index`/`status`/`electrum` lands and the package can actually index a v2 chain. **Add both
+together, or neither.**
+
+Numbering differs between the two repos: `pruned-electrs` numbers from its own first patch, this
+package prepends the inherited `0001`. So `pruned-electrs` 0001 and 0002 are this package's 0002 and
+0003.
+
 ## 0001 — bound client writes so a wedged peer cannot stall the server
 
 Inherited unchanged from `Start9-Community/electrs-startos`. Sets a 60s `SO_SNDTIMEO` on accepted
