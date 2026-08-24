@@ -1,5 +1,7 @@
 import { FileHelper } from '@start9labs/start-sdk'
+import { rm } from 'fs/promises'
 import { manifest } from 'bitcoin-core-startos/startos/manifest'
+import { backends, defaultBackend } from './backends'
 import { tomlFile } from './fileModels/electrs.toml'
 import { storeJson } from './fileModels/store.json'
 import { i18n } from './i18n'
@@ -22,7 +24,14 @@ export const main = sdk.setupMain(async ({ effects }) => {
   // re-fires and restarts electrs to heal on those — and never on a plain
   // bitcoind update. While bitcoind is absent each resolves null and we omit the
   // field, letting electrs fail to connect until the .const() heals it in.
-  const bitcoind = await bitcoindBridge(effects)
+  // Which flavor to index. All three share host ids, internal ports and volume
+  // layout, because the forks change only their host-side preferred ports, so
+  // one set of constants resolves any of them.
+  const backend =
+    (await storeJson.read((s) => s.backend).const(effects)) ?? defaultBackend
+  console.info(`Indexing ${backends[backend].title} (${backend})`)
+
+  const bitcoind = await bitcoindBridge(effects, backend)
   await tomlFile.merge(effects, {
     ...(bitcoind.rpc && { daemon_rpc_addr: bitcoind.rpc }),
     ...(bitcoind.p2p && { daemon_p2p_addr: bitcoind.p2p }),
@@ -39,7 +48,9 @@ export const main = sdk.setupMain(async ({ effects }) => {
         readonly: false,
       })
       .mountDependency<typeof manifest>({
-        dependencyId: 'bitcoind',
+        // Any of the three; they share volume id and layout. The mountpoint is
+        // constant so electrs.toml's cookie_file never has to move.
+        dependencyId: backend as 'bitcoind',
         volumeId: 'main',
         subpath: null,
         mountpoint: '/mnt/bitcoind',
@@ -48,9 +59,37 @@ export const main = sdk.setupMain(async ({ effects }) => {
     'electrs',
   )
 
-  // Restart only when bitcoind writes a replacement cookie — an absent cookie
-  // means bitcoind is down.
   const rootfs = await electrsContainer.rootfs
+
+  // Discard the index if it was built against a different flavor.
+  //
+  // The two Knots flavors share history only to the RDTS split, and mainnet and
+  // a testnet share none at all, so an index built against one does not
+  // describe the other. electrs would cope with the first case by reorganising,
+  // but a reorg thousands of blocks deep on a large index is slow and rarely
+  // exercised, and the second case is not well defined. Rebuilding is slower and
+  // always correct.
+  //
+  // Done here rather than in the action so an interrupted action cannot leave a
+  // half-deleted index, and so a backup restored onto a different selection is
+  // caught too. electrs's db_dir defaults to ./db and the image's WORKDIR is
+  // /data, which is where the main volume mounts.
+  const indexedBackend = await storeJson.read((s) => s.indexedBackend).once()
+  if (indexedBackend !== undefined && indexedBackend !== backend) {
+    console.warn(
+      `Bitcoin service changed from ${indexedBackend} to ${backend}. Discarding the address index; it describes a different chain and will be rebuilt.`,
+    )
+    await rm(`${rootfs}/data/db`, { recursive: true, force: true })
+    await storeJson.merge(effects, { syncNotified: false, everSynced: false })
+    syncNotified = false
+    everSynced = false
+  }
+  if (indexedBackend !== backend) {
+    await storeJson.merge(effects, { indexedBackend: backend })
+  }
+
+  // Restart only when the backend writes a replacement cookie; an absent cookie
+  // means it is down.
   await FileHelper.string(`${rootfs}/mnt/bitcoind/.cookie`)
     .read(
       (cookie) => cookie,

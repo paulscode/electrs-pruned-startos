@@ -22,13 +22,33 @@ export const manifest = setupManifest({
       arch: ['x86_64', 'aarch64'],
     },
   },
+  // All three are optional here and exactly one is returned as required from
+  // dependencies.ts, chosen by the user. The SDK evaluates setupDependencies at
+  // runtime, so a conditional requirement is a supported shape. Declaring them
+  // optional is what lets the UI show only the one in use.
   dependencies: {
     bitcoind: {
       description: bitcoindDescription,
-      optional: false,
+      optional: true,
       metadata: {
         title: 'Bitcoin',
         icon: 'https://raw.githubusercontent.com/Start9Labs/bitcoin-core-startos/refs/heads/30.x/dep-icon.svg',
+      },
+    },
+    'knots-prerdts': {
+      description: bitcoindDescription,
+      optional: true,
+      metadata: {
+        title: 'Bitcoin Knots (pre-RDTS) Companion',
+        icon: 'https://raw.githubusercontent.com/paulscode/knots-prerdts-startos/main/dep-icon.png',
+      },
+    },
+    'knots-rdts': {
+      description: bitcoindDescription,
+      optional: true,
+      metadata: {
+        title: 'Bitcoin Knots (RDTS) Companion',
+        icon: 'https://raw.githubusercontent.com/paulscode/knots-rdts-startos/main/dep-icon.png',
       },
     },
   },

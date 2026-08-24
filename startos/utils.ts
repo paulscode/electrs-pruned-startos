@@ -1,4 +1,5 @@
 import { T } from '@start9labs/start-sdk'
+import { BackendId } from './backends'
 import {
   peerLocalHostId as btcPeerLocalHostId,
   peerPortLocal as btcPeerPortLocal,
@@ -25,7 +26,7 @@ export const logFilters = {
 export type LogFilters = keyof typeof logFilters
 
 /**
- * bitcoind's RPC and P2P endpoints over the LXC bridge, for electrs.toml's
+ * The selected backend's RPC and P2P endpoints over the LXC bridge, for electrs.toml's
  * `daemon_rpc_addr` / `daemon_p2p_addr`. Two reactive bridge-address watches —
  * one per bitcoind host — each chained `.const()`, so main restarts only when
  * that address actually changes: a bitcoind update is 0 restarts, bitcoind
@@ -46,10 +47,10 @@ export type LogFilters = keyof typeof logFilters
  * from `net.assignedPort`/`assignedSslPort`: which of those is populated is a
  * property of how bitcoind bound the port, not something to infer here.
  */
-export const bitcoindBridge = async (effects: T.Effects) => {
+export const bitcoindBridge = async (effects: T.Effects, backend: BackendId) => {
   const rpc = await sdk.host
     .getBridgeAddress(effects, {
-      packageId: 'bitcoind',
+      packageId: backend,
       hostId: btcRpcHostId,
       internalPort: btcRpcPort,
       ssl: false,
@@ -57,7 +58,7 @@ export const bitcoindBridge = async (effects: T.Effects) => {
     .const()
   const p2p = await sdk.host
     .getBridgeAddress(effects, {
-      packageId: 'bitcoind',
+      packageId: backend,
       hostId: btcPeerLocalHostId,
       internalPort: btcPeerPortLocal,
     })
