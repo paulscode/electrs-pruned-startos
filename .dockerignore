@@ -1,0 +1,14 @@
+# Keep build detritus out of the context.
+#
+# `patch` leaves a .orig beside every file it touches when it has to save one,
+# and the Dockerfile applies patches/ with `patch -p1 --fuzz=0`. If a .orig from
+# an earlier run is in the context, the next run refuses to create it again and
+# the build fails with "The next patch would create the file ...". That already
+# happened once. The file is worthless either way, so never ship it.
+**/*.orig
+**/*.rej
+**/target/
+builds/
+node_modules/
+javascript/
+*.s9pk
