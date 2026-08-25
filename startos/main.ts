@@ -88,9 +88,50 @@ export const main = sdk.setupMain(async ({ effects }) => {
     await storeJson.merge(effects, { indexedBackend: backend })
   }
 
+  /**
+   * Which chain the backend is on, read from its own generated config.
+   *
+   * The official package and the two mainnet forks are always mainnet, where
+   * bitcoind keeps its data at the datadir root and electrs' `network` is
+   * `bitcoin`. `knots-blake2b` is not: it runs regtest or testnet4, bitcoind
+   * puts a non-mainnet chain's data (its RPC cookie included) in a subdirectory
+   * named for that chain, and electrs has to be told which network it is on or
+   * it comes up with the wrong magic bytes and never agrees with the node.
+   *
+   * Read rather than configured here, so the two cannot drift: the backend
+   * regenerates that file on every start, and the reactive read below restarts
+   * electrs when it changes. Absent means mainnet, which is correct for the
+   * three backends that have no chain line at all.
+   */
+  const backendConf = await FileHelper.string(
+    `${rootfs}/mnt/bitcoind/bitcoin.conf`,
+  )
+    .read(
+      (c) => c,
+      (prev, next) => next === null || prev === next,
+    )
+    .const(effects)
+
+  const chain =
+    (['regtest', 'testnet4', 'testnet', 'signet'] as const).find((c) =>
+      backendConf?.split('\n').some((l) => l.trim() === `${c}=1`),
+    ) ?? null
+
+  await tomlFile.merge(effects, {
+    network: chain ?? 'bitcoin',
+    // Mainnet's cookie is at the datadir root; every other chain nests it.
+    cookie_file: chain
+      ? `/mnt/bitcoind/${chain}/.cookie`
+      : '/mnt/bitcoind/.cookie',
+  })
+
   // Restart only when the backend writes a replacement cookie; an absent cookie
   // means it is down.
-  await FileHelper.string(`${rootfs}/mnt/bitcoind/.cookie`)
+  await FileHelper.string(
+    chain
+      ? `${rootfs}/mnt/bitcoind/${chain}/.cookie`
+      : `${rootfs}/mnt/bitcoind/.cookie`,
+  )
     .read(
       (cookie) => cookie,
       (prev, next) => next === null || prev === next,
