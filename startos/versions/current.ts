@@ -1,7 +1,7 @@
 import { VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '0.11.1:21',
+  version: '0.11.1:22',
   releaseNotes: {
     en_US: `The instructions now link to a full wallet-connection guide.
 
