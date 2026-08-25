@@ -37,6 +37,14 @@ still applies; read the upstream repo's notes too when touching shared code.
   wanting one, the bug is elsewhere.
 - **`txindex` is not required and must not be requested.** Nothing in electrs's block or transaction
   path reads it.
+- **Pruned-block witness data needs btc-rpc-proxy v0.6.0 or later.** Below that the proxy asked
+  peers for `MSG_BLOCK`, so every block fetched from below the prune height came back
+  witness-stripped and neither of its checks could see it: `check_witness_commitment()`
+  short-circuits to true when no transaction carries a witness, which is exactly a stripped block.
+  Fixed upstream in [v0.6.0](https://github.com/Start9Labs/btc-rpc-proxy/releases/tag/v0.6.0),
+  merged from this project's PR #29, which also rejects a peer that strips witnesses it commits to.
+  The bitcoind package pins the proxy version, not this one, so there is nothing to set here, but a
+  user on an older bitcoind package is getting stripped blocks below the prune height.
 - **The proxy is not this package's to start.** The bitcoind package puts btc-rpc-proxy on the RPC
   port (8332) exactly when pruning is enabled, and bitcoind itself moves to 58332. So
   `bitcoindBridge`'s `rpcHostId`/8332 resolves to the proxy when pruned and to bitcoind when
