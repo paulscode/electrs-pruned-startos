@@ -39,6 +39,7 @@ const dict = {
   'The official Bitcoin service, Core or Knots, either flavor.': 39,
   'A second node following the chain most hashpower follows, installed alongside your main Bitcoin service.': 40,
   'A second node following the BIP-110 (RDTS) chain, installed alongside your main Bitcoin service.': 41,
+  'A node on the BLAKE2b test networks, whose blocks use a different proof of work and a longer header.': 42,
 } as const
 
 export type I18nKey = keyof typeof dict

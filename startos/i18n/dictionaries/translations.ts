@@ -40,6 +40,7 @@ export default {
     39: 'El servicio oficial de Bitcoin, Core o Knots, cualquiera de las dos variantes.',
     40: 'Un segundo nodo que sigue la cadena que sigue la mayor parte del poder de cómputo, instalado junto a tu servicio principal de Bitcoin.',
     41: 'Un segundo nodo que sigue la cadena BIP-110 (RDTS), instalado junto a tu servicio principal de Bitcoin.',
+    42: 'Un nodo en las redes de prueba BLAKE2b, cuyos bloques usan una prueba de trabajo diferente y una cabecera más larga.',
   },
   de_DE: {
     0: 'Starte Electrs!',
@@ -80,6 +81,7 @@ export default {
     39: 'Der offizielle Bitcoin-Dienst, Core oder Knots, beide Varianten.',
     40: 'Ein zweiter Knoten, der der Kette folgt, der die meiste Rechenleistung folgt, installiert neben deinem Haupt-Bitcoin-Dienst.',
     41: 'Ein zweiter Knoten, der der BIP-110-Kette (RDTS) folgt, installiert neben deinem Haupt-Bitcoin-Dienst.',
+    42: 'Ein Knoten in den BLAKE2b-Testnetzen, dessen Blöcke einen anderen Proof of Work und einen längeren Header verwenden.',
   },
   pl_PL: {
     0: 'Uruchamianie Electrs!',
@@ -120,6 +122,7 @@ export default {
     39: 'Oficjalna usługa Bitcoin, Core lub Knots, dowolna z odmian.',
     40: 'Drugi węzeł podążający za łańcuchem, za którym podąża większość mocy obliczeniowej, zainstalowany obok głównej usługi Bitcoin.',
     41: 'Drugi węzeł podążający za łańcuchem BIP-110 (RDTS), zainstalowany obok głównej usługi Bitcoin.',
+    42: 'Węzeł w sieciach testowych BLAKE2b, którego bloki używają innego dowodu pracy i dłuższego nagłówka.',
   },
   fr_FR: {
     0: "Démarrage d'Electrs !",
@@ -160,5 +163,6 @@ export default {
     39: 'Le service Bitcoin officiel, Core ou Knots, les deux variantes.',
     40: 'Un second nœud suivant la chaîne que suit la majorité de la puissance de calcul, installé à côté de votre service Bitcoin principal.',
     41: 'Un second nœud suivant la chaîne BIP-110 (RDTS), installé à côté de votre service Bitcoin principal.',
+    42: 'Un nœud sur les réseaux de test BLAKE2b, dont les blocs utilisent une preuve de travail différente et un en-tête plus long.',
   },
 } satisfies Record<string, LangDict>

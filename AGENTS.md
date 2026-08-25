@@ -47,6 +47,12 @@ still applies; read the upstream repo's notes too when touching shared code.
   blocks are taken over p2p before they are pruned. Keep `instructions.md` honest about this.
 - **`blockchain.transaction.get` with `verbose=true` fails for pruned blocks.** Its second leg is
   `getrawtransaction`, which the proxy does not intercept. Known gap, not a regression.
+- **This package can index a BLAKE2b chain.** Patches `0004`-`0006` carry the header-v2 support:
+  164-byte headers, BLAKE2b block identity, and a replacement for `bsl::Block::visit`, which reads
+  the transaction count from a hardcoded offset 80 and silently indexes a v2 block as empty. Select
+  `Bitcoin Knots BLAKE2b` as the backend. **Pruning and BLAKE2b do not compose yet**: that flavor
+  ships no btc-rpc-proxy, and the proxy could not serve a v2 block anyway, so a pruned node of that
+  flavor has nothing to serve the blocks it dropped.
 - **Patches 0002 and 0003 have regtest coverage that lives elsewhere** — the harness in
   [paulscode/pruned-electrs](https://github.com/paulscode/pruned-electrs) (`spikes/harness/`). Run
   `query.py` and `failure_modes.sh` there after any submodule bump. `--fuzz=0` catches context drift;

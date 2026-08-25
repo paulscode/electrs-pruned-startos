@@ -22,7 +22,7 @@ export const manifest = setupManifest({
       arch: ['x86_64', 'aarch64'],
     },
   },
-  // All three are optional here and exactly one is returned as required from
+  // All four are optional here and exactly one is returned as required from
   // dependencies.ts, chosen by the user. The SDK evaluates setupDependencies at
   // runtime, so a conditional requirement is a supported shape. Declaring them
   // optional is what lets the UI show only the one in use.
@@ -49,6 +49,17 @@ export const manifest = setupManifest({
       metadata: {
         title: 'Bitcoin Knots (RDTS) Companion',
         icon: 'https://raw.githubusercontent.com/paulscode/knots-rdts-startos/main/dep-icon.png',
+      },
+    },
+    // A different lineage from the three above: BLAKE2b test networks, on its
+    // own ports, and with no btc-rpc-proxy, so a pruned node of this flavor has
+    // nothing to serve the blocks it has dropped. See backends.ts.
+    'knots-blake2b': {
+      description: bitcoindDescription,
+      optional: true,
+      metadata: {
+        title: 'Bitcoin Knots BLAKE2b',
+        icon: 'https://raw.githubusercontent.com/paulscode/knots-blake2b-startos/main/dep-icon.png',
       },
     },
   },

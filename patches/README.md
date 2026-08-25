@@ -12,16 +12,14 @@ a known defect, and record below what retires it.
 `0002` and `0003` are the reason this package exists, so unlike the others they are not waiting to
 be retired — they are waiting to be upstreamed. Both are inert on an archival node.
 
-**Not carried yet: the BLAKE2b header-v2 type.** [pruned-electrs](https://github.com/paulscode/pruned-electrs)
-carries it as its `patches/0003`, but it is dead code — it adds `HeaderV2`, `AnyHeader` and a
-`blake2b_simd` dependency, and nothing calls them. Carrying it here would grow the image and force a
-rebuild for no behaviour change. It belongs in this package when the substitution across
-`chain`/`index`/`status`/`electrum` lands and the package can actually index a v2 chain. **Add both
-together, or neither.**
+`0004` through `0006` are the BLAKE2b header-v2 support, and they are not waiting to be retired
+either. They are what lets this package index a chain whose blocks have 164-byte headers and BLAKE2b
+identity. Inert on a SHA256d chain: `AnyHeader::parse` reads the header's own version field, and on a
+chain that never sets bit 31 every path is the v1 one.
 
 Numbering differs between the two repos: `pruned-electrs` numbers from its own first patch, this
-package prepends the inherited `0001`. So `pruned-electrs` 0001 and 0002 are this package's 0002 and
-0003.
+package prepends the inherited `0001`. So `pruned-electrs` 0001 to 0005 are this package's 0002 to
+0006.
 
 ## 0001 — bound client writes so a wedged peer cannot stall the server
 
@@ -65,6 +63,34 @@ other client. An intermediate version used one 300s budget everywhere and a sing
 downed proxy froze the whole server for five minutes. Indexing waits 300s, serving waits 10s.
 
 **Retire when:** 0002 is upstreamed, since this is a fix to it rather than to upstream.
+
+## 0004 — the BLAKE2b 164-byte header type and its hash
+
+A self-contained `HeaderV2` plus an `AnyHeader` union, with the staged BLAKE2b block hash. Tested
+against two independent oracles: the five vectors Knots publishes in `block_header_v2.json`, checked
+stage by stage, and four headers taken off live testnet4. Adds one dependency, `blake2b_simd`.
+
+**Retire when:** `rust-bitcoin` gains the format. It cannot be extended from outside: `block::Header`
+is a fixed six-field struct.
+
+## 0005 — wire it through chain, db, index, p2p, status and tracker
+
+The substitution. Also replaces `bsl::Block::visit` on the block path, because `bitcoin_slices` reads
+the transaction-count varint from a hardcoded offset 80 and on a 164-byte header that lands inside
+`m_nonce2`. It does not reliably error: on our fixture it reads a count of zero, returns `Ok` and
+visits nothing, so a four-transaction block indexes as empty with nothing logged anywhere.
+`headerv2::visit_block_txs` reimplements the few lines that assume the offset using that crate's own
+public `scan_len` and `Transaction`, so no fork was needed and the transaction parsing is unchanged.
+
+**Retire when:** `bitcoin_slices` learns variable-length headers.
+
+## 0006 — a test recording that rust-bitcoin cannot decode a v2 block
+
+No behaviour change. It pins the assumption the other two rest on, and documents why
+`btc-rpc-proxy` cannot serve a pruned v2 block: the proxy decodes peer blocks with `rust-bitcoin`'s
+`Block` and checks a SHA256d `block_hash()`.
+
+**Retire when:** 0004 is retired.
 
 ## Verifying after a submodule bump
 

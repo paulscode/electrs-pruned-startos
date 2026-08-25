@@ -7,7 +7,8 @@
   },
   "dependencies": {
     "@start9labs/start-sdk": "2.0.9",
-    "bitcoin-core-startos": "github:Start9Labs/bitcoin-core-startos#next/28.x"
+    "bitcoin-core-startos": "github:Start9Labs/bitcoin-core-startos#next/28.x",
+    "knots-blake2b-startos": "github:paulscode/knots-blake2b-startos#main"
   },
   "devDependencies": {
     "@types/node": "^22.17.1",

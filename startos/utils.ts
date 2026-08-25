@@ -1,11 +1,5 @@
 import { T } from '@start9labs/start-sdk'
-import { BackendId } from './backends'
-import {
-  peerLocalHostId as btcPeerLocalHostId,
-  peerPortLocal as btcPeerPortLocal,
-  rpcHostId as btcRpcHostId,
-  rpcPort as btcRpcPort,
-} from 'bitcoin-core-startos/startos/utils'
+import { backends, BackendId } from './backends'
 import { i18n } from './i18n'
 import { sdk } from './sdk'
 
@@ -48,19 +42,24 @@ export type LogFilters = keyof typeof logFilters
  * property of how bitcoind bound the port, not something to infer here.
  */
 export const bitcoindBridge = async (effects: T.Effects, backend: BackendId) => {
+  // Per backend, because `knots-blake2b` is a separate lineage on its own ports
+  // rather than a fork that changed only its external port numbers.
+  const { rpcHostId, rpcPort, peerLocalHostId, peerPortLocal } =
+    backends[backend].endpoints
+
   const rpc = await sdk.host
     .getBridgeAddress(effects, {
       packageId: backend,
-      hostId: btcRpcHostId,
-      internalPort: btcRpcPort,
+      hostId: rpcHostId,
+      internalPort: rpcPort,
       ssl: false,
     })
     .const()
   const p2p = await sdk.host
     .getBridgeAddress(effects, {
       packageId: backend,
-      hostId: btcPeerLocalHostId,
-      internalPort: btcPeerPortLocal,
+      hostId: peerLocalHostId,
+      internalPort: peerPortLocal,
     })
     .const()
   return { rpc, p2p }
