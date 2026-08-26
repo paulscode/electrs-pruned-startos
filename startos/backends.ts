@@ -21,6 +21,32 @@ type Endpoints = {
 }
 
 /**
+ * The health checks a backend must be passing before electrs should index it.
+ *
+ * Per backend rather than one list for all of them, because the ids are not
+ * shared. StartOS looks each id up in the dependency's own health results and
+ * treats a miss exactly like a failure: `dep.statusInfo.health[id]` is
+ * `undefined`, `undefined !== 'success'`, and the UI shows "Required health
+ * check not passing" for a check that does not exist. Nothing clears it, and
+ * the warning cannot even name the check, because there is no name to read.
+ *
+ * The official package and its two mainnet forks run a daemon `bitcoind` with a
+ * `sync-progress` check beside it. `knots-blake2b` is a separate lineage and
+ * runs a daemon `node` with a `chain` check, which answers a different question:
+ * on testnet4 the fork shares magic bytes, port and genesis with ordinary
+ * testnet4, so "synced" is not the thing worth asserting. Which chain the node
+ * is on is.
+ */
+type BackendHealthChecks = readonly string[]
+
+/**
+ * Written out rather than imported, unlike the endpoints below: a health check
+ * id is not exported by the packages that declare it, so this is the one thing
+ * here that a rename upstream would break silently rather than at compile time.
+ */
+const officialHealthChecks: BackendHealthChecks = ['bitcoind', 'sync-progress']
+
+/**
  * The official package and its two mainnet forks share these, because the forks
  * change only their host-side `preferredExternalPort` values. Imported rather
  * than written out, so a change upstream reaches us as a type error.
@@ -51,6 +77,7 @@ export const backends = {
     title: 'Bitcoin',
     blurb: i18n('The official Bitcoin service, Core or Knots, either flavor.'),
     endpoints: officialEndpoints,
+    healthChecks: officialHealthChecks,
   },
   'knots-prerdts': {
     title: 'Bitcoin Knots (pre-RDTS) Companion',
@@ -58,6 +85,7 @@ export const backends = {
       'A second node following the chain most hashpower follows, installed alongside your main Bitcoin service.',
     ),
     endpoints: officialEndpoints,
+    healthChecks: officialHealthChecks,
   },
   'knots-rdts': {
     title: 'Bitcoin Knots (RDTS) Companion',
@@ -65,6 +93,7 @@ export const backends = {
       'A second node following the BIP-110 (RDTS) chain, installed alongside your main Bitcoin service.',
     ),
     endpoints: officialEndpoints,
+    healthChecks: officialHealthChecks,
   },
   'knots-blake2b': {
     title: 'Bitcoin Knots BLAKE2b',
@@ -77,6 +106,7 @@ export const backends = {
       peerLocalHostId: b2bPeerLocalHostId,
       peerPortLocal: b2bPeerPortLocal,
     },
+    healthChecks: ['node', 'chain'] satisfies BackendHealthChecks,
   },
 } as const
 

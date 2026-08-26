@@ -82,11 +82,14 @@ Every other upstream option — the database directory, the block-download wait,
 
 One, and it is required.
 
-| Dependency | Required | Health checks required      | Mounted                              | Why                       |
-| ---------- | -------- | --------------------------- | ------------------------------------ | ------------------------- |
-| Bitcoin    | Yes      | `bitcoind`, `sync-progress` | `main`, read-only at `/mnt/bitcoind` | Chain data and the cookie |
+| Dependency | Required | Health checks required | Mounted | Why |
+| ---------- | -------- | ---------------------- | ------- | --- |
+| Bitcoin, Knots (pre-RDTS), Knots (RDTS) | Yes, whichever is selected | `bitcoind`, `sync-progress` | `main`, read-only at `/mnt/bitcoind` | Chain data and the cookie |
+| Knots BLAKE2b | Yes, when selected | `node`, `chain` | `main`, read-only at `/mnt/bitcoind` | Chain data and the cookie |
 
 **Requiring Bitcoin's own sync check is deliberate.** While Bitcoin is still doing its initial download, electrs reports its dependency as unsatisfied rather than running a duplicate poll of its own — the state shows in one place instead of two.
+
+**The ids differ per backend, and getting them wrong is silent.** The official package and its two mainnet forks run a daemon `bitcoind` with a `sync-progress` check beside it. Knots BLAKE2b is a separate lineage: its daemon is `node` and its check is `chain`, which asks which chain the node is on rather than how far along it is — the more useful question on testnet4, where the fork shares magic bytes, port and genesis with the ordinary chain. StartOS resolves a required id against the dependency's own health results and treats an id that does not exist exactly like one that is failing, so requiring the wrong name shows "Required health check not passing" forever, with no name to display. The lists live per backend in `startos/backends.ts`.
 
 **Bitcoin may be pruned, and that is the reason this package exists.** The standard Electrs package raises a recurring `critical` task forcing pruning off, because upstream electrs refuses to start against a pruned node. This package raises no such task.
 
@@ -202,7 +205,7 @@ file_models:
   - store.json # everSynced / syncNotified flags
 startos_managed_env_vars: [] # configuration is written into electrs.toml
 dependencies:
-  - bitcoind # required, kind: running, checks: bitcoind + sync-progress
+  - <selected backend> # required, kind: running; checks per backend, see backends.ts
 interfaces:
   main: { type: api, port: 50001 } # TLS-terminated by StartOS; plaintext is bridge-only
 actions:

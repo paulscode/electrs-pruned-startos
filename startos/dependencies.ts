@@ -1,4 +1,4 @@
-import { defaultBackend, versionRange } from './backends'
+import { backends, defaultBackend, versionRange } from './backends'
 import { storeJson } from './fileModels/store.json'
 import { sdk } from './sdk'
 
@@ -26,11 +26,15 @@ export const setDependencies = sdk.setupDependencies(async ({ effects }) => {
   const backend =
     (await storeJson.read((s) => s.backend).const(effects)) ?? defaultBackend
 
-  // Health checks are named identically across the flavors because the forks
-  // inherit them from the same upstream package.
+  // Not one list for every flavor. The two mainnet forks inherit their health
+  // check ids from the official package, but `knots-blake2b` is a separate
+  // lineage with its own, and requiring an id a package does not declare is
+  // indistinguishable from requiring one that is failing: StartOS reads
+  // `health[id]`, gets `undefined`, and shows "Required health check not
+  // passing" forever, unable to even name the check. See `backends.ts`.
   const requirement = {
     kind: 'running' as const,
-    healthChecks: ['bitcoind', 'sync-progress'],
+    healthChecks: [...backends[backend].healthChecks],
     versionRange: versionRange[backend],
   }
 
