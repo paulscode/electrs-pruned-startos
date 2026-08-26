@@ -17,8 +17,8 @@ either. They are what lets this package index a chain whose blocks have 164-byte
 identity. Inert on a SHA256d chain: `AnyHeader::parse` reads the header's own version field, and on a
 chain that never sets bit 31 every path is the v1 one.
 
-Numbering differs between the two repos: `pruned-electrs` numbers from its own first patch, this
-package prepends the inherited `0001`. So `pruned-electrs` 0001 to 0005 are this package's 0002 to
+Numbering differs between the two repos: `electrs-pruned` numbers from its own first patch, this
+package prepends the inherited `0001`. So `electrs-pruned` 0001 to 0005 are this package's 0002 to
 0006.
 
 ## 0001 — bound client writes so a wedged peer cannot stall the server
@@ -95,6 +95,6 @@ No behaviour change. It pins the assumption the other two rest on, and documents
 ## Verifying after a submodule bump
 
 The pruning behaviour is covered by the regtest harness in the
-[pruned-electrs](https://github.com/paulscode/pruned-electrs) repo — `spikes/harness/setup.sh up`,
+[electrs-pruned](https://github.com/paulscode/electrs-pruned) repo — `spikes/harness/setup.sh up`,
 then `query.py` and `failure_modes.sh`. Run both after any bump; `--fuzz=0` catches context drift,
 but only tests catch behavioural drift.

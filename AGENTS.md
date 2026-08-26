@@ -62,7 +62,7 @@ still applies; read the upstream repo's notes too when touching shared code.
   ships no btc-rpc-proxy, and the proxy could not serve a v2 block anyway, so a pruned node of that
   flavor has nothing to serve the blocks it dropped.
 - **Patches 0002 and 0003 have regtest coverage that lives elsewhere** — the harness in
-  [paulscode/pruned-electrs](https://github.com/paulscode/pruned-electrs) (`spikes/harness/`). Run
+  [paulscode/electrs-pruned](https://github.com/paulscode/electrs-pruned) (`spikes/harness/`). Run
   `query.py` and `failure_modes.sh` there after any submodule bump. `--fuzz=0` catches context drift;
   only those catch behavioural drift.
 

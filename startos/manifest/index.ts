@@ -2,10 +2,10 @@ import { setupManifest } from '@start9labs/start-sdk'
 import { bitcoindDescription, long, short } from './i18n'
 
 export const manifest = setupManifest({
-  id: 'pruned-electrs',
+  id: 'electrs-pruned',
   title: 'Pruned Electrs',
   license: 'MIT',
-  packageRepo: 'https://github.com/paulscode/pruned-electrs',
+  packageRepo: 'https://github.com/paulscode/electrs-pruned',
   upstreamRepo: 'https://github.com/romanz/electrs/',
   marketingUrl: 'https://github.com/romanz/electrs/',
   donationUrl: null,
