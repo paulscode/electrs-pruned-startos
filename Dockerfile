@@ -39,6 +39,16 @@ RUN curl -sL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_$
 
 COPY --from=builder /usr/local/cargo/bin/electrs /bin/electrs
 
+# Generates electrs.toml from the environment when ELECTRS_CONFIG_FROM_ENV=1,
+# for Umbrel and plain Docker, which have no settings form. StartOS writes the
+# config itself and execs `electrs`, which arrives here as "$@" and is passed
+# straight through, so this changes nothing there.
+COPY ./docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 WORKDIR /data
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["electrs"]
 
 STOPSIGNAL SIGINT
