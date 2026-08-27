@@ -5,4 +5,5 @@ node_modules/
 .vscode/
 docker-images
 javascript
-ncc-cachebuilds/
+ncc-cache
+builds/

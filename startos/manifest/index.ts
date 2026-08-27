@@ -5,7 +5,7 @@ export const manifest = setupManifest({
   id: 'electrs-pruned',
   title: 'Electrs Pruned',
   license: 'MIT',
-  packageRepo: 'https://github.com/paulscode/electrs-pruned',
+  packageRepo: 'https://github.com/paulscode/electrs-pruned-startos',
   upstreamRepo: 'https://github.com/romanz/electrs/',
   marketingUrl: 'https://github.com/romanz/electrs/',
   donationUrl: null,
