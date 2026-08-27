@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="icon.png" alt="Pruned Electrs Logo" width="21%">
+  <img src="icon.png" alt="Electrs Pruned Logo" width="21%">
 </p>
 
-# Pruned Electrs on StartOS
+# Electrs Pruned on StartOS
 
 > Everything not listed in this document should behave the same as upstream
 > electrs. If a feature, setting, or behavior is not mentioned here, the

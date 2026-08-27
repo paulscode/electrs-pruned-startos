@@ -1,4 +1,4 @@
-# Pruned Electrs
+# Electrs Pruned
 
 An Electrum server that works with a **pruned** Bitcoin node, so you do not need a full copy of the blockchain on disk.
 
@@ -24,7 +24,7 @@ An archival node still works normally. Nothing changes for you if you are not pr
 ## Getting set up
 
 1. Install **Bitcoin** first if it isn't already installed. Pruning may be on or off; both work.
-2. Start Pruned Electrs. On first run it will report **Electrum server is starting** until it has bound its port, and it will not begin indexing until your Bitcoin node has completed its initial block download.
+2. Start Electrs Pruned. On first run it will report **Electrum server is starting** until it has bound its port, and it will not begin indexing until your Bitcoin node has completed its initial block download.
 3. Once Bitcoin is fully synced, it will switch to **building its address index**.
 4. When the **Sync Progress** health check reports **Fully synced**, point your wallet at the **Electrum (SSL)** interface — copy the address from the **Interfaces** page rather than typing a port from memory.
 

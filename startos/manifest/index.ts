@@ -3,7 +3,7 @@ import { bitcoindDescription, long, short } from './i18n'
 
 export const manifest = setupManifest({
   id: 'electrs-pruned',
-  title: 'Pruned Electrs',
+  title: 'Electrs Pruned',
   license: 'MIT',
   packageRepo: 'https://github.com/paulscode/electrs-pruned',
   upstreamRepo: 'https://github.com/romanz/electrs/',
