@@ -39,6 +39,32 @@ Either way it happens once, and it survives restarts — if it is interrupted it
 
 Once that first **Fully synced** appears, the index is built and is never rebuilt. If **Sync Progress** later reports **Electrs is not responding. It is likely busy indexing; this usually clears on its own.**, that is a busy moment — Electrs answers wallet queries only between indexing batches — and it clears by itself, normally within a minute or two. It does not mean the index is being rebuilt, and it is not a reason to reindex.
 
+## What running against a pruned node costs you
+
+Nothing here is free, and one cost is worth stating plainly because it is the reason upstream Electrs
+does not offer this.
+
+To index a chain your node no longer stores, blocks are fetched from the Bitcoin peer-to-peer
+network. A peer that serves you a block learns that you wanted it. During the first index that tells
+a peer only that you are syncing, which is what any node reveals while it catches up. After the index
+is built, though, a few kinds of request can still reach for a block on demand — looking up the full
+details of an old transaction, or opening an old block in a block explorer — and those are triggered
+by something you asked for. A peer watching closely could learn which blocks interest you.
+
+Two things bound it:
+
+- **Ordinary wallet use does not fetch anything.** Address balances, history and unspent outputs are
+  answered from the index this server builds. Your wallet's addresses are not sent to peers, and
+  querying them touches no peer at all.
+- **If your Bitcoin node runs over Tor, so do these fetches.** They go out over the node's existing
+  peer connections. That is slower, sometimes much slower, but the peer does not learn where the
+  request came from.
+
+If this tradeoff is not one you want to make, the answer is an archival node with the official
+Electrs. It stores the whole chain so that nothing ever has to be fetched, and it is the more private
+option. This package exists for people who want an Electrum server on a machine that cannot hold a
+second full copy of the chain, and it is honest about what that costs.
+
 ## Using Electrs
 
 ### Electrum (SSL) interface
