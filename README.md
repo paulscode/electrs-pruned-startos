@@ -17,6 +17,22 @@
 
 ---
 
+## Install
+
+Add this registry to StartOS and install from it:
+
+```
+https://start9.paulscode.com
+```
+
+That is the quickest route, and it is the one to use unless you have a reason to
+build. Installing from the registry gets the signed release; building from source
+gets whatever is in the working tree, which is not the same thing.
+
+It needs a Bitcoin node. That may be the official `bitcoind` package from Start9's
+own registry, or one of the Knots variants published here; the package offers a
+choice and does not require this registry for the node.
+
 ## Table of Contents
 
 - [Image and Container Runtime](#image-and-container-runtime)
