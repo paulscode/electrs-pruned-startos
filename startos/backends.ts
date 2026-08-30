@@ -74,7 +74,7 @@ const officialEndpoints: Endpoints = {
  */
 export const backends = {
   bitcoind: {
-    title: 'Bitcoin',
+    title: 'Bitcoin Core',
     blurb: i18n('The official Bitcoin service, Core or Knots, either flavor.'),
     endpoints: officialEndpoints,
     healthChecks: officialHealthChecks,

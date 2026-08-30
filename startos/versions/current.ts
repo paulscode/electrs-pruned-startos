@@ -2,7 +2,7 @@ import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 import { storeJson } from '../fileModels/store.json'
 
 export const current = VersionInfo.of({
-  version: '0.11.1:26',
+  version: '0.11.1:27',
   releaseNotes: {
     en_US: `The Bitcoin Knots (RDTS) Companion has been removed from Select Node. It no longer has a chain of its own: those rules now take effect at the BLAKE2b fork rather than activating separately, so that option and Bitcoin Knots (BLAKE2b) Companion had become two names for the same destination. An indexer pointed at it now points at Bitcoin Knots (BLAKE2b) Companion, and rebuilds its index, because the old one describes a chain this can no longer reach.
 
