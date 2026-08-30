@@ -84,7 +84,7 @@ export const backends = {
   // rules at the BLAKE2b fork height instead, so the RDTS variant and the
   // BLAKE2b one stopped being two things to choose between.
   'knots-prerdts': {
-    title: 'Bitcoin Knots (pre-RDTS) Companion',
+    title: 'Knots (pre-RDTS) Companion',
     blurb: i18n(
       'A second node following the chain most hashpower follows, installed alongside your main Bitcoin service.',
     ),
