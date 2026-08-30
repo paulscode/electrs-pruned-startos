@@ -41,7 +41,10 @@ export type LogFilters = keyof typeof logFilters
  * from `net.assignedPort`/`assignedSslPort`: which of those is populated is a
  * property of how bitcoind bound the port, not something to infer here.
  */
-export const bitcoindBridge = async (effects: T.Effects, backend: BackendId) => {
+export const bitcoindBridge = async (
+  effects: T.Effects,
+  backend: BackendId,
+) => {
   // Per backend, because `knots-blake2b` is a separate lineage on its own ports
   // rather than a fork that changed only its external port numbers.
   const { rpcHostId, rpcPort, peerLocalHostId, peerPortLocal } =

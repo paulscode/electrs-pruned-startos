@@ -40,8 +40,7 @@ export const selectBackend = sdk.Action.withInput(
   inputSpec,
 
   async ({ effects }) => ({
-    backend:
-      (await storeJson.read((s) => s.backend).once()) ?? defaultBackend,
+    backend: (await storeJson.read((s) => s.backend).once()) ?? defaultBackend,
   }),
 
   async ({ effects, input }) => {
