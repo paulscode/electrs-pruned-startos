@@ -91,17 +91,21 @@ export const main = sdk.setupMain(async ({ effects }) => {
   /**
    * Which chain the backend is on, read from its own generated config.
    *
-   * The official package and the two mainnet forks are always mainnet, where
-   * bitcoind keeps its data at the datadir root and electrs' `network` is
-   * `bitcoin`. `knots-blake2b` is not: it runs regtest or testnet4, bitcoind
-   * puts a non-mainnet chain's data (its RPC cookie included) in a subdirectory
-   * named for that chain, and electrs has to be told which network it is on or
-   * it comes up with the wrong magic bytes and never agrees with the node.
+   * The official package and the pre-RDTS fork are always mainnet, where bitcoind
+   * keeps its data at the datadir root and electrs' `network` is `bitcoin`.
+   * `knots-blake2b` may be either: it offers regtest and, since it repinned to
+   * Knots rc4, mainnet. bitcoind puts a non-mainnet chain's data, its RPC cookie
+   * included, in a subdirectory named for that chain, and electrs has to be told
+   * which network it is on or it comes up with the wrong magic bytes and never
+   * agrees with the node.
+   *
+   * Deriving it from the absence of a chain line rather than from the backend id
+   * is what made that repin a non-event here: mainnet writes no such line, so it
+   * falls through to `bitcoin` without this file knowing anything changed.
    *
    * Read rather than configured here, so the two cannot drift: the backend
    * regenerates that file on every start, and the reactive read below restarts
-   * electrs when it changes. Absent means mainnet, which is correct for the
-   * three backends that have no chain line at all.
+   * electrs when it changes.
    */
   const backendConf = await FileHelper.string(
     `${rootfs}/mnt/bitcoind/bitcoin.conf`,
@@ -124,6 +128,30 @@ export const main = sdk.setupMain(async ({ effects }) => {
       ? `/mnt/bitcoind/${chain}/.cookie`
       : '/mnt/bitcoind/.cookie',
   })
+
+  // A backend can change chain without changing its id, and the check above
+  // compares ids only. `knots-blake2b` did exactly that when it moved from
+  // testnet4 to mainnet: same package, different chain.
+  //
+  // electrs itself copes, because it appends the network to its database
+  // directory and so starts a fresh one rather than reading a mismatched
+  // index. What does not cope is the pair of flags recording that an index
+  // had finished: left standing, the health check describes a first-time
+  // build as a resync, and the notification for the new chain never fires
+  // because it already fired for the old one.
+  const indexedNetwork = await storeJson.read((s) => s.indexedNetwork).once()
+  const currentNetwork = chain ?? 'bitcoin'
+  if (indexedNetwork !== undefined && indexedNetwork !== currentNetwork) {
+    console.warn(
+      `Chain changed from ${indexedNetwork} to ${currentNetwork} on the same Bitcoin service. electrs indexes each chain separately, so this one starts from nothing.`,
+    )
+    await storeJson.merge(effects, { syncNotified: false, everSynced: false })
+    syncNotified = false
+    everSynced = false
+  }
+  if (indexedNetwork !== currentNetwork) {
+    await storeJson.merge(effects, { indexedNetwork: currentNetwork })
+  }
 
   // Restart only when the backend writes a replacement cookie; an absent cookie
   // means it is down.

@@ -30,9 +30,48 @@ esc() {
 : "${BITCOIN_RPC_PORT:=8332}"
 : "${BITCOIN_P2P_HOST:=$BITCOIN_RPC_HOST}"
 : "${BITCOIN_P2P_PORT:=8333}"
+ELECTRS_NETWORK_EXPLICIT="${ELECTRS_NETWORK:-}"
 : "${ELECTRS_NETWORK:=bitcoin}"
 : "${ELECTRS_RPC_ADDR:=0.0.0.0:50001}"
 : "${ELECTRS_LOG_FILTERS:=INFO}"
+
+# Discover the cookie, and the chain with it, from a mounted data directory.
+#
+# bitcoind keeps a non-mainnet chain's data, cookie included, in a subdirectory
+# named for that chain, so the location of the cookie tells you which chain the
+# node is on. A node app whose chain is a setting can therefore be followed
+# without being asked and without a second variable to keep in step: switch the
+# node from regtest to testnet4 and the next start of this container follows it.
+#
+# ELECTRS_NETWORK still wins if it is set explicitly, because an operator who
+# names a chain should not be overridden by a guess.
+if [ -n "${BITCOIN_COOKIE_DIR:-}" ] && [ -z "${BITCOIN_RPC_COOKIE_FILE:-}" ]; then
+    for probe in \
+        "regtest:regtest" \
+        "testnet4:testnet4" \
+        "testnet3:testnet" \
+        "signet:signet" \
+        ":bitcoin"
+    do
+        sub="${probe%%:*}"
+        net="${probe#*:}"
+        if [ -n "$sub" ]; then
+            candidate="$BITCOIN_COOKIE_DIR/$sub/.cookie"
+        else
+            candidate="$BITCOIN_COOKIE_DIR/.cookie"
+        fi
+        if [ -r "$candidate" ]; then
+            BITCOIN_RPC_COOKIE_FILE="$candidate"
+            [ -n "${ELECTRS_NETWORK_EXPLICIT:-}" ] || ELECTRS_NETWORK="$net"
+            echo "entrypoint: found the node cookie at $candidate, chain $net"
+            break
+        fi
+    done
+    if [ -z "${BITCOIN_RPC_COOKIE_FILE:-}" ]; then
+        echo "entrypoint: no .cookie under $BITCOIN_COOKIE_DIR yet; the node may still be starting" >&2
+        exit 1
+    fi
+fi
 
 {
     printf 'network = "%s"\n' "$(esc "$ELECTRS_NETWORK")"

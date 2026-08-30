@@ -19,12 +19,30 @@ export const storeJson = FileHelper.json(
      * repairs to the official service instead of leaving the package with no
      * resolvable backend.
      */
-    backend: z.enum(backendIds as [BackendId, ...BackendId[]]).catch(defaultBackend),
+    backend: z
+      .enum(backendIds as [BackendId, ...BackendId[]])
+      .catch(defaultBackend),
     /**
      * The backend the current index was built against. Compared with `backend`
      * at startup: a mismatch means the index describes a different chain, so it
      * is wiped rather than reorganised. See init/backendGuard.ts.
      */
-    indexedBackend: z.enum(backendIds as [BackendId, ...BackendId[]]).optional().catch(undefined),
+    indexedBackend: z
+      .enum(backendIds as [BackendId, ...BackendId[]])
+      .optional()
+      .catch(undefined),
+    /**
+     * The chain the current index was built against, as electrs names its
+     * network: `bitcoin`, `testnet4`, `regtest` and so on.
+     *
+     * `indexedBackend` alone is not enough. A backend can change chain without
+     * changing its id, which is exactly what `knots-blake2b` did when it moved
+     * from testnet4 to mainnet: same package, different chain, and the backend
+     * comparison saw nothing. electrs itself is fine, because it keys its
+     * database directory on the network and simply starts a fresh one, but the
+     * flags recording that an index had completed were left standing and the
+     * notification for the new one would never have fired.
+     */
+    indexedNetwork: z.string().optional().catch(undefined),
   }),
 )

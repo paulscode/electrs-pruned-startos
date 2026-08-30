@@ -79,6 +79,10 @@ export const backends = {
     endpoints: officialEndpoints,
     healthChecks: officialHealthChecks,
   },
+  // `knots-rdts` was here and is not any more. RDTS no longer has a chain of
+  // its own: Knots rc4 removed the versionbits deployment and activates those
+  // rules at the BLAKE2b fork height instead, so the RDTS variant and the
+  // BLAKE2b one stopped being two things to choose between.
   'knots-prerdts': {
     title: 'Bitcoin Knots (pre-RDTS) Companion',
     blurb: i18n(
@@ -87,18 +91,10 @@ export const backends = {
     endpoints: officialEndpoints,
     healthChecks: officialHealthChecks,
   },
-  'knots-rdts': {
-    title: 'Bitcoin Knots (RDTS) Companion',
-    blurb: i18n(
-      'A second node following the BIP-110 (RDTS) chain, installed alongside your main Bitcoin service.',
-    ),
-    endpoints: officialEndpoints,
-    healthChecks: officialHealthChecks,
-  },
   'knots-blake2b': {
     title: 'Bitcoin Knots BLAKE2b',
     blurb: i18n(
-      'A node on the BLAKE2b test networks, whose blocks use a different proof of work and a longer header.',
+      'A node on the BLAKE2b chain, whose blocks use a different proof of work and a longer header.',
     ),
     endpoints: {
       rpcHostId: b2bRpcHostId,
@@ -137,7 +133,6 @@ export const versionRange: Record<BackendId, string> = {
   bitcoind:
     '(>=28.4:17 && <29) || (>=29.4:4 && <30) || (>=30.3:4 && <31) || >=31.1:4',
   'knots-prerdts': '>=29.4:6',
-  'knots-rdts': '>=29.4:6',
   // The release that added the whitelisted `peer-local` listener. Without it
   // electrs's p2p connection earns no permissions and is dropped the first time
   // it asks for an old block, which ends the process.

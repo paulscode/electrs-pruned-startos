@@ -43,14 +43,6 @@ export const manifest = setupManifest({
         icon: 'https://raw.githubusercontent.com/paulscode/knots-prerdts-startos/main/dep-icon.png',
       },
     },
-    'knots-rdts': {
-      description: bitcoindDescription,
-      optional: true,
-      metadata: {
-        title: 'Bitcoin Knots (RDTS) Companion',
-        icon: 'https://raw.githubusercontent.com/paulscode/knots-rdts-startos/main/dep-icon.png',
-      },
-    },
     // A different lineage from the three above: BLAKE2b test networks, on its
     // own ports, and with no btc-rpc-proxy, so a pruned node of this flavor has
     // nothing to serve the blocks it has dropped. See backends.ts.
