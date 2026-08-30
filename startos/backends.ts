@@ -92,7 +92,7 @@ export const backends = {
     healthChecks: officialHealthChecks,
   },
   'knots-blake2b': {
-    title: 'Bitcoin Knots (BLAKE2b) Companion',
+    title: 'Knots (BLAKE2b) Companion',
     blurb: i18n(
       'A node on the BLAKE2b chain, whose blocks use a different proof of work and a longer header.',
     ),
