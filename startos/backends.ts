@@ -74,8 +74,16 @@ const officialEndpoints: Endpoints = {
  */
 export const backends = {
   bitcoind: {
-    title: 'Bitcoin Core',
-    blurb: i18n('The official Bitcoin service, Core or Knots, either flavor.'),
+    // Named for Knots rather than Core, which is a deliberate departure from the
+    // packaging guide's "call a multi-flavor dependency Bitcoin". Both flavors
+    // share the `bitcoind` id, so this one entry is the only way to reach either,
+    // and nearly everyone running this stack runs Knots. Naming the common case
+    // costs a Core user one line of the blurb; naming the rare one would leave
+    // the majority hunting for an option that is not there.
+    title: 'Bitcoin Knots',
+    blurb: i18n(
+      'The official Bitcoin service, whichever flavor is installed: Knots, Core, or a BLAKE2b build sideloaded over either.',
+    ),
     endpoints: officialEndpoints,
     healthChecks: officialHealthChecks,
   },

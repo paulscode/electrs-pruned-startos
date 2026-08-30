@@ -36,7 +36,7 @@ const dict = {
   'Select Bitcoin Service': 36,
   'Choose which installed Bitcoin service this Electrum server indexes.': 37,
   'Changing the Bitcoin service discards the address index and rebuilds it from scratch. The two services follow different chains, so the existing index does not describe the new one. Rebuilding can take hours, and considerably longer against a node that has already pruned the blocks being indexed.': 38,
-  'The official Bitcoin service, Core or Knots, either flavor.': 39,
+  'The official Bitcoin service, whichever flavor is installed: Knots, Core, or a BLAKE2b build sideloaded over either.': 39,
   'A second node following the chain most hashpower follows, installed alongside your main Bitcoin service.': 40,
   'A second node following the BIP-110 (RDTS) chain, installed alongside your main Bitcoin service.': 41,
   'A node on the BLAKE2b chain, whose blocks use a different proof of work and a longer header.': 42,

@@ -1,42 +1,22 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
-import { storeJson } from '../fileModels/store.json'
 
 export const current = VersionInfo.of({
-  version: '0.11.1:30',
+  version: '0.11.1:31',
   releaseNotes: {
-    en_US: `The Bitcoin Knots (RDTS) Companion has been removed from Select Node. It no longer has a chain of its own: those rules now take effect at the BLAKE2b fork rather than activating separately, so that option and Bitcoin Knots (BLAKE2b) Companion had become two names for the same destination. An indexer pointed at it now points at Bitcoin Knots (BLAKE2b) Companion, and rebuilds its index, because the old one describes a chain this can no longer reach.
-
-Also fixes a case where the index was rebuilt without saying so. The address index is discarded and rebuilt when you change which node backs it, but a node can change chain without changing which node it is, and that was not noticed. The result was a rebuild that reported itself as a resync and never sent the notification for finishing. It is now noticed and reported correctly.`,
-    es_ES: `The Bitcoin Knots (RDTS) Companion has been removed from Select Node. It no longer has a chain of its own: those rules now take effect at the BLAKE2b fork rather than activating separately, so that option and Bitcoin Knots (BLAKE2b) Companion had become two names for the same destination. An indexer pointed at it now points at Bitcoin Knots (BLAKE2b) Companion, and rebuilds its index, because the old one describes a chain this can no longer reach.
-
-Also fixes a case where the index was rebuilt without saying so. The address index is discarded and rebuilt when you change which node backs it, but a node can change chain without changing which node it is, and that was not noticed. The result was a rebuild that reported itself as a resync and never sent the notification for finishing. It is now noticed and reported correctly.`,
-    de_DE: `The Bitcoin Knots (RDTS) Companion has been removed from Select Node. It no longer has a chain of its own: those rules now take effect at the BLAKE2b fork rather than activating separately, so that option and Bitcoin Knots (BLAKE2b) Companion had become two names for the same destination. An indexer pointed at it now points at Bitcoin Knots (BLAKE2b) Companion, and rebuilds its index, because the old one describes a chain this can no longer reach.
-
-Also fixes a case where the index was rebuilt without saying so. The address index is discarded and rebuilt when you change which node backs it, but a node can change chain without changing which node it is, and that was not noticed. The result was a rebuild that reported itself as a resync and never sent the notification for finishing. It is now noticed and reported correctly.`,
-    pl_PL: `The Bitcoin Knots (RDTS) Companion has been removed from Select Node. It no longer has a chain of its own: those rules now take effect at the BLAKE2b fork rather than activating separately, so that option and Bitcoin Knots (BLAKE2b) Companion had become two names for the same destination. An indexer pointed at it now points at Bitcoin Knots (BLAKE2b) Companion, and rebuilds its index, because the old one describes a chain this can no longer reach.
-
-Also fixes a case where the index was rebuilt without saying so. The address index is discarded and rebuilt when you change which node backs it, but a node can change chain without changing which node it is, and that was not noticed. The result was a rebuild that reported itself as a resync and never sent the notification for finishing. It is now noticed and reported correctly.`,
-    fr_FR: `The Bitcoin Knots (RDTS) Companion has been removed from Select Node. It no longer has a chain of its own: those rules now take effect at the BLAKE2b fork rather than activating separately, so that option and Bitcoin Knots (BLAKE2b) Companion had become two names for the same destination. An indexer pointed at it now points at Bitcoin Knots (BLAKE2b) Companion, and rebuilds its index, because the old one describes a chain this can no longer reach.
-
-Also fixes a case where the index was rebuilt without saying so. The address index is discarded and rebuilt when you change which node backs it, but a node can change chain without changing which node it is, and that was not noticed. The result was a rebuild that reported itself as a resync and never sent the notification for finishing. It is now noticed and reported correctly.`,
+    en_US: `Select Node's first option is now called Bitcoin Knots rather than Bitcoin Core. Both are the same StartOS service and share one entry, so the name is only a label for whichever you have installed, including a BLAKE2b build sideloaded over either. It reads as Knots because that is what nearly everyone running this indexer is running. If you are on Core, this is still your option. Nothing about which service is selected has changed.`,
+    es_ES: `Select Node's first option is now called Bitcoin Knots rather than Bitcoin Core. Both are the same StartOS service and share one entry, so the name is only a label for whichever you have installed, including a BLAKE2b build sideloaded over either. It reads as Knots because that is what nearly everyone running this indexer is running. If you are on Core, this is still your option. Nothing about which service is selected has changed.`,
+    de_DE: `Select Node's first option is now called Bitcoin Knots rather than Bitcoin Core. Both are the same StartOS service and share one entry, so the name is only a label for whichever you have installed, including a BLAKE2b build sideloaded over either. It reads as Knots because that is what nearly everyone running this indexer is running. If you are on Core, this is still your option. Nothing about which service is selected has changed.`,
+    pl_PL: `Select Node's first option is now called Bitcoin Knots rather than Bitcoin Core. Both are the same StartOS service and share one entry, so the name is only a label for whichever you have installed, including a BLAKE2b build sideloaded over either. It reads as Knots because that is what nearly everyone running this indexer is running. If you are on Core, this is still your option. Nothing about which service is selected has changed.`,
+    fr_FR: `Select Node's first option is now called Bitcoin Knots rather than Bitcoin Core. Both are the same StartOS service and share one entry, so the name is only a label for whichever you have installed, including a BLAKE2b build sideloaded over either. It reads as Knots because that is what nearly everyone running this indexer is running. If you are on Core, this is still your option. Nothing about which service is selected has changed.`,
   },
   migrations: {
-    up: async ({ effects }) => {
-      // `knots-rdts` is no longer offered, so an install pointed at it would
-      // fall back to the default on read and start indexing a different chain
-      // by list order rather than by intent. Map it to `knots-blake2b`, the
-      // node that replaced it: Knots rc4 activates the RDTS rules at the
-      // BLAKE2b fork height instead of through versionbits, so there is no
-      // separate RDTS chain left to index.
-      //
-      // This does mean a full rebuild, which main.ts triggers when it sees
-      // `indexedBackend` disagree. There is no way to avoid that: the old index
-      // describes a chain this package can no longer reach.
-      const backend = await storeJson.read((s) => s.backend).once()
-      if ((backend as string) === 'knots-rdts') {
-        await storeJson.merge(effects, { backend: 'knots-blake2b' })
-      }
-    },
+    // Nothing to migrate. This version changes one option's label; the stored
+    // value behind it is the package id `bitcoind`, which has not moved, so no
+    // install needs rewriting and no index is rebuilt.
+    //
+    // The `knots-rdts` remap that :30 needed lives in `v0_11_1_30.ts`, with the
+    // version that introduced it, rather than being re-declared here.
+    up: async ({ effects }) => {},
     down: IMPOSSIBLE,
   },
 })

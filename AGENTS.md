@@ -57,10 +57,20 @@ still applies; read the upstream repo's notes too when touching shared code.
   `getrawtransaction`, which the proxy does not intercept. Known gap, not a regression.
 - **This package can index a BLAKE2b chain.** Patches `0004`-`0006` carry the header-v2 support:
   164-byte headers, BLAKE2b block identity, and a replacement for `bsl::Block::visit`, which reads
-  the transaction count from a hardcoded offset 80 and silently indexes a v2 block as empty. Select
-  `Bitcoin Knots BLAKE2b` as the backend. **Pruning and BLAKE2b do not compose yet**: that flavor
-  ships no btc-rpc-proxy, and the proxy could not serve a v2 block anyway, so a pruned node of that
-  flavor has nothing to serve the blocks it dropped.
+  the transaction count from a hardcoded offset 80 and silently indexes a v2 block as empty. Pick
+  the BLAKE2b node in Select Node: `Bitcoin Knots (BLAKE2b) Companion` for our own package, or
+  `Bitcoin Knots` when a BLAKE2b build has been sideloaded over the official `bitcoind` (which is
+  what Retropex's `knots-startos` release does, taking the `bitcoind` id and keeping the official
+  hosts and ports).
+- **Pruning and BLAKE2b compose only until the retained window turns over.** `knots-blake2b` does
+  now ship btc-rpc-proxy, so the earlier note that it shipped none is wrong. What is still true is
+  that no released proxy can serve a **v2** block: our header-v2 support for it is PR #33 and is
+  unmerged, and Retropex's node ships a proxy binary with no BLAKE2b support either. Today every
+  block below a prune height is a pre-fork v1 block, which stock v0.8.0 serves fine, so a pruned
+  BLAKE2b node works. That stops on a schedule: the prune target keeps a fixed number of megabytes,
+  so the retained window moves forward and eventually holds only v2 blocks. At `prune=5000` that is
+  roughly four months from the 2026-08-30 activation. Either #33 lands or we publish our own proxy
+  image before then.
 - **Patches 0002 and 0003 have regtest coverage that lives elsewhere** — the harness in
   [paulscode/electrs-pruned](https://github.com/paulscode/electrs-pruned) (`spikes/harness/`). Run
   `query.py` and `failure_modes.sh` there after any submodule bump. `--fuzz=0` catches context drift;
