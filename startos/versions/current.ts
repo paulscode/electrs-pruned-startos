@@ -1,23 +1,21 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 const notes =
-  'Sync Progress now says how far along the index actually is, rather than only ' +
-  'that it is building. It reports a percentage and the block it has reached out ' +
-  "of your node's height, and it keeps reporting throughout, including during the " +
-  'long stretches when the server is too busy indexing to answer anything else. ' +
+  'Fixes Sync Progress reading "Incorrect locale information provided" instead of ' +
+  'how far the index has got. ' +
   ' ' +
-  'That last part is why it could not say before. The check asks the Electrum ' +
-  'server whether it is ready, and during a build that question goes unanswered ' +
-  'for minutes at a time, because the server indexes a whole batch of blocks ' +
-  'before it services any request. The progress figure is read from somewhere ' +
-  'that does answer throughout, so a first index no longer looks the same at hour ' +
-  'one as it does at hour six. ' +
+  'The progress figures added in the previous version are the first numbers this ' +
+  'service asks the platform to format, and it formats them against the language ' +
+  'setting of the environment it runs in, which is one it does not accept. The ' +
+  'numbers are now formatted before they are handed over. Grouping still follows ' +
+  'your language where the setting is a usable one. ' +
   ' ' +
-  'Nothing about how the index is built has changed, and nothing new is exposed ' +
-  'outside the service to do this.'
+  'Sync Progress otherwise behaves as described for the previous version: a ' +
+  'percentage and the block reached out of your node\'s height, reported ' +
+  'throughout the build.'
 
 export const current = VersionInfo.of({
-  version: '0.11.1:34',
+  version: '0.11.1:35',
   releaseNotes: {
     en_US: notes,
     es_ES: notes,

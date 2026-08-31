@@ -189,6 +189,8 @@ The target has to come from Bitcoin, with `getblockchaininfo` over the same cook
 
 Both numbers are clamped against each other. They are read a moment apart from two services, so a block landing in between can put the index a hair past the height it was measured against, and "100.2%" or "block 962,700 of 962,698" reads as a fault rather than as the one-block race it is. If either number is missing or unparseable the message falls back to the wording without figures, which is why both forms exist in the dictionary.
 
+**Every param handed to `i18n` is a string, and that is load-bearing.** `i18n` formats a **number** param with `Intl.NumberFormat(process.env.LANG)`. StartOS runs services with `LANG=C.UTF-8`, which `Intl` rejects outright: `RangeError: Incorrect locale information provided`. In `0.11.1:34` these were the first number params in the package, nothing had ever reached that call, and the health check displayed that sentence where the progress should have been. The block counts are therefore grouped here — by the runtime's locale where `Intl` accepts it, falling back to `en-US` — and passed as strings. **Do not pass a raw number to `i18n` from this package.** The same trap is waiting in any package that has only ever used static keys.
+
 ## Backups and Restore
 
 The `main` volume is copied **except the index**, which is excluded.

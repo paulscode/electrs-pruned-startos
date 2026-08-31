@@ -255,9 +255,39 @@ export const main = sdk.setupMain(async ({ effects }) => {
    * Null on any doubt, and every caller has a message that reads correctly without
    * a number. A health message is not worth being wrong about.
    */
+  /**
+   * A locale `Intl` will actually accept, for grouping the block numbers.
+   *
+   * Everything here is a string by the time it reaches `i18n`, and that is not
+   * incidental. `i18n` formats a **number** param with
+   * `Intl.NumberFormat(process.env.LANG)`, and StartOS runs services with
+   * `LANG=C.UTF-8`, which `Intl` rejects: `RangeError: Incorrect locale
+   * information provided`. The health check displayed that sentence where the
+   * progress was meant to be. Number params are the only thing that reaches that
+   * call and these were the first in this package, so nothing had exercised it.
+   *
+   * Grouping is still done by locale where the runtime offers a usable one,
+   * falling back to en-US rather than to no grouping, since "962698" is harder to
+   * read at a glance than "962,698" in any locale.
+   */
+  const groupLocale = (() => {
+    const fromEnv = process.env.LANG?.replace(/\.UTF-8$/i, '').replace('_', '-')
+    try {
+      if (fromEnv) {
+        new Intl.NumberFormat(fromEnv)
+        return fromEnv
+      }
+    } catch {
+      // Not a locale Intl knows; fall through.
+    }
+    return 'en-US'
+  })()
+
+  const group = (n: number) => n.toLocaleString(groupLocale)
+
   const readProgress = async (): Promise<{
-    indexed: number
-    total: number
+    indexed: string
+    total: string
     percent: string
   } | null> => {
     const probe = `IDX=$(curl -s --max-time 5 http://127.0.0.1:4224/metrics 2>/dev/null \
@@ -291,8 +321,8 @@ printf '%s %s' "\${IDX:-}" "\${TGT:-}"`
     // read as a fault rather than as the one-block race they are.
     const total_ = Math.round(total)
     return {
-      indexed: Math.min(Math.round(indexed), total_),
-      total: total_,
+      indexed: group(Math.min(Math.round(indexed), total_)),
+      total: group(total_),
       percent: Math.min(100, (indexed / total) * 100).toFixed(1),
     }
   }
