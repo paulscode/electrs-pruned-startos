@@ -16,6 +16,13 @@ export const shape = z.object({
   // unresolved — main omits the field rather than writing a placeholder, and
   // the reactive .const() write lands the real address once bitcoind appears.
   daemon_rpc_addr: z.string().optional().catch(undefined),
+
+  // A second node to read pruned blocks from, and the cookie for it. Optional and written together
+  // or not at all: electrs ignores a half-set pair, and omitting both is what every single-node
+  // install does. Absent rather than empty, like the addresses above, so an unresolved dependency
+  // leaves no stale value behind.
+  helper_rpc_addr: z.string().optional().catch(undefined),
+  helper_cookie_file: z.string().optional().catch(undefined),
   daemon_p2p_addr: z.string().optional().catch(undefined),
   // Which chain to index. Was a literal 'bitcoin', which is right for the
   // official package and its two mainnet forks and wrong for `knots-blake2b`:

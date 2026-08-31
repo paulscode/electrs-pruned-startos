@@ -1,7 +1,7 @@
 import { FileHelper } from '@start9labs/start-sdk'
 import { rm } from 'fs/promises'
 import { manifest } from 'bitcoin-core-startos/startos/manifest'
-import { backends, defaultBackend } from './backends'
+import { backends, defaultBackend, backendIds } from './backends'
 import { tomlFile } from './fileModels/electrs.toml'
 import { storeJson } from './fileModels/store.json'
 import { i18n } from './i18n'
@@ -37,6 +37,31 @@ export const main = sdk.setupMain(async ({ effects }) => {
     ...(bitcoind.p2p && { daemon_p2p_addr: bitcoind.p2p }),
   })
 
+  // A second node that might hold the blocks the selected one has pruned.
+  //
+  // The two chains of the fork share every block below the split, so an operator running a
+  // pruned node of one and a full node of the other already has most of the missing history on
+  // local disk. Reading it from there costs a local RPC instead of pulling each block off the
+  // network through the proxy, one at a time.
+  //
+  // Only the address is decided here. Whether a candidate is usable — archival rather than
+  // pruned, and synced far enough to hold what is being asked for — is checked by electrs
+  // against the node itself, because those are facts only the node can answer and they change
+  // while it runs. An unusable candidate is refused there with a reason and indexing proceeds
+  // exactly as it does without one.
+  //
+  // The first installed candidate wins. A null bridge means that dependency is not installed,
+  // which is the common case: most installs have one node and get no helper at all.
+  const helperCandidates = await Promise.all(
+    backendIds
+      .filter((id) => id !== backend)
+      .map(async (id) => ({
+        id,
+        rpc: (await bitcoindBridge(effects, id)).rpc,
+      })),
+  )
+  const helper = helperCandidates.find((c) => c.rpc)
+
   const electrsContainer = sdk.SubContainer.of(
     effects,
     { imageId: 'electrs' },
@@ -54,6 +79,16 @@ export const main = sdk.setupMain(async ({ effects }) => {
         volumeId: 'main',
         subpath: null,
         mountpoint: '/mnt/bitcoind',
+        readonly: true,
+      })
+      .mountDependency<typeof manifest>({
+        // The helper's own volume, for its cookie. Mounted whether or not a helper was found:
+        // whether electrs is *told* to use it is decided below, and mounting the selected
+        // backend a second time is harmless on an install that has only one node.
+        dependencyId: (helper?.id ?? backend) as 'bitcoind',
+        volumeId: 'main',
+        subpath: null,
+        mountpoint: '/mnt/helper',
         readonly: true,
       }),
     'electrs',
@@ -121,12 +156,37 @@ export const main = sdk.setupMain(async ({ effects }) => {
       backendConf?.split('\n').some((l) => l.trim() === `${c}=1`),
     ) ?? null
 
+  // The helper's cookie sits under its own datadir on the same rule as the backend's: at the root
+  // on mainnet, in a subdirectory named for the chain otherwise. Read from the helper's config
+  // rather than assumed to match the backend's, because the whole point of a helper is that it is
+  // a different node, and on a fork it is following a different chain.
+  const helperConf = helper
+    ? await FileHelper.string(`${rootfs}/mnt/helper/bitcoin.conf`)
+        .read(
+          (c) => c,
+          (prev, next) => next === null || prev === next,
+        )
+        .const(effects)
+    : null
+  const helperChain =
+    (['regtest', 'testnet4', 'testnet', 'signet'] as const).find((c) =>
+      helperConf?.split('\n').some((l) => l.trim() === `${c}=1`),
+    ) ?? null
+
   await tomlFile.merge(effects, {
     network: chain ?? 'bitcoin',
     // Mainnet's cookie is at the datadir root; every other chain nests it.
     cookie_file: chain
       ? `/mnt/bitcoind/${chain}/.cookie`
       : '/mnt/bitcoind/.cookie',
+    // Absent unless a second node was found, which is the usual case. electrs treats the pair as
+    // all-or-nothing, so both fields move together.
+    ...(helper?.rpc && {
+      helper_rpc_addr: helper.rpc,
+      helper_cookie_file: helperChain
+        ? `/mnt/helper/${helperChain}/.cookie`
+        : '/mnt/helper/.cookie',
+    }),
   })
 
   // A backend can change chain without changing its id, and the check above

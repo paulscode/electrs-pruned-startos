@@ -73,6 +73,38 @@ if [ -n "${BITCOIN_COOKIE_DIR:-}" ] && [ -z "${BITCOIN_RPC_COOKIE_FILE:-}" ]; th
     fi
 fi
 
+# An archival node to read pruned blocks from, if one is on this machine.
+#
+# The two chains of the fork share every block below the split, so a full node of
+# either one already holds almost everything a pruned node has discarded. Reading
+# those from its disk beats fetching them from the network a block at a time.
+#
+# The cookie is probed exactly like the node's above, and for the same reason: its
+# location says which chain the helper is on, so this follows a helper that is
+# switched between chains without a second variable to keep in step.
+#
+# Both the address and a readable cookie are required. A helper that is configured
+# but not yet readable is skipped with a note rather than failing the start: it is
+# an optimisation, and indexing works without it.
+if [ -n "${HELPER_RPC_HOST:-}" ] && [ -n "${HELPER_COOKIE_DIR:-}" ] \
+    && [ -z "${HELPER_RPC_COOKIE_FILE:-}" ]; then
+    for sub in regtest testnet4 testnet signet ""; do
+        if [ -n "$sub" ]; then
+            candidate="$HELPER_COOKIE_DIR/$sub/.cookie"
+        else
+            candidate="$HELPER_COOKIE_DIR/.cookie"
+        fi
+        if [ -r "$candidate" ]; then
+            HELPER_RPC_COOKIE_FILE="$candidate"
+            echo "entrypoint: found the helper cookie at $candidate"
+            break
+        fi
+    done
+    if [ -z "${HELPER_RPC_COOKIE_FILE:-}" ]; then
+        echo "entrypoint: no readable .cookie under $HELPER_COOKIE_DIR; continuing without a block helper" >&2
+    fi
+fi
+
 {
     printf 'network = "%s"\n' "$(esc "$ELECTRS_NETWORK")"
     printf 'daemon_rpc_addr = "%s:%s"\n' "$(esc "$BITCOIN_RPC_HOST")" "$BITCOIN_RPC_PORT"
@@ -99,6 +131,14 @@ fi
         && printf 'index_batch_size = %s\n' "$ELECTRS_INDEX_BATCH_SIZE"
     [ -n "${ELECTRS_INDEX_LOOKUP_LIMIT:-}" ] \
         && printf 'index_lookup_limit = %s\n' "$ELECTRS_INDEX_LOOKUP_LIMIT"
+
+        # Written together or not at all: electrs ignores a half-set pair, so emitting one
+        # without the other would look configured and quietly do nothing.
+        if [ -n "${HELPER_RPC_HOST:-}" ] && [ -n "${HELPER_RPC_COOKIE_FILE:-}" ]; then
+            printf 'helper_rpc_addr = "%s:%s"\n' \
+                "$(esc "$HELPER_RPC_HOST")" "${HELPER_RPC_PORT:-8332}"
+            printf 'helper_cookie_file = "%s"\n' "$(esc "$HELPER_RPC_COOKIE_FILE")"
+        fi
     :
 } > "$CONF"
 
