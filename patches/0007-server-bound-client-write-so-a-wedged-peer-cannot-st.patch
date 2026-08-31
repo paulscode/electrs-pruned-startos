@@ -1,5 +1,23 @@
+From ec71988ee19e9b73132dd7a6f8aaadc9936b6ef7 Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Mon, 31 Aug 2026 09:37:48 -0500
+Subject: [PATCH 7/7] server: bound client write so a wedged peer cannot stall
+ the server
+
+Carried into this tree from the package's patch set, which had it while
+this tree did not. The two sets had drifted in both directions: this fix
+existed only in the package, while protocol 1.8 and the concurrent pruned
+fetch existed only here, so neither was a superset and regenerating either
+from the other would have silently dropped work.
+
+This tree is now the single source; the package's patches are generated
+from these commits rather than maintained alongside them.
+---
+ src/server.rs | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
 diff --git a/src/server.rs b/src/server.rs
-index f50662f..953be8f 100644
+index b5b0cb9..770dfbf 100644
 --- a/src/server.rs
 +++ b/src/server.rs
 @@ -7,6 +7,7 @@ use std::{
@@ -29,7 +47,7 @@ index f50662f..953be8f 100644
  struct Peer {
      id: usize,
      client: Client,
-@@ -212,6 +225,19 @@ fn handle_peer_events(
+@@ -216,6 +229,19 @@ fn handle_peer_events(
  fn accept_loop(listener: TcpListener, server_tx: Sender<Event>) -> Result<()> {
      for (peer_id, conn) in listener.incoming().enumerate() {
          let stream = conn.context("failed to accept")?;
@@ -49,3 +67,6 @@ index f50662f..953be8f 100644
          let tx = server_tx.clone();
          spawn("recv_loop", move || {
              let result = recv_loop(peer_id, &stream, tx);
+-- 
+2.43.0
+
