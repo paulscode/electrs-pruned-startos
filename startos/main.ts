@@ -156,6 +156,14 @@ export const main = sdk.setupMain(async ({ effects }) => {
       backendConf?.split('\n').some((l) => l.trim() === `${c}=1`),
     ) ?? null
 
+  // Mainnet's cookie is at the datadir root; every other chain nests it. Named once
+  // because two things authenticate to the node with it now: electrs, through
+  // `cookie_file` below, and the sync health check, which asks the node how tall it
+  // is. Two copies of this rule would be two places to get a chain switch wrong.
+  const cookiePath = chain
+    ? `/mnt/bitcoind/${chain}/.cookie`
+    : '/mnt/bitcoind/.cookie'
+
   // The helper's cookie sits under its own datadir on the same rule as the backend's: at the root
   // on mainnet, in a subdirectory named for the chain otherwise. Read from the helper's config
   // rather than assumed to match the backend's, because the whole point of a helper is that it is
@@ -175,10 +183,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
   await tomlFile.merge(effects, {
     network: chain ?? 'bitcoin',
-    // Mainnet's cookie is at the datadir root; every other chain nests it.
-    cookie_file: chain
-      ? `/mnt/bitcoind/${chain}/.cookie`
-      : '/mnt/bitcoind/.cookie',
+    cookie_file: cookiePath,
     // Absent unless a second node was found, which is the usual case. electrs treats the pair as
     // all-or-nothing, so both fields move together.
     ...(helper?.rpc && {
@@ -229,6 +234,69 @@ export const main = sdk.setupMain(async ({ effects }) => {
   /**
    * ======================== Daemons ========================
    */
+  /**
+   * How far the index has got, and how far it has to go.
+   *
+   * Read from electrs's Prometheus endpoint, not its Electrum RPC, and that is the
+   * whole reason this can report a number at all. The Electrum RPC is precisely
+   * what is unavailable during a build: the sync loop indexes a whole ~2000-block
+   * batch before servicing a request, which is why the check below has to treat a
+   * non-answer as normal. The metrics server is a separate thread and answers
+   * throughout. Confirmed against a live build, where the Electrum probe timed out
+   * and this returned immediately.
+   *
+   * `index_height` is set per block as each is indexed, so it moves during a batch
+   * rather than only between batches.
+   *
+   * The target has to come from the node, because electrs publishes no metric for
+   * it: `index_height` is where indexing has reached, and during a build its header
+   * chain stops at the same place, so nothing electrs knows is the finish line.
+   *
+   * Null on any doubt, and every caller has a message that reads correctly without
+   * a number. A health message is not worth being wrong about.
+   */
+  const readProgress = async (): Promise<{
+    indexed: number
+    total: number
+    percent: string
+  } | null> => {
+    const probe = `IDX=$(curl -s --max-time 5 http://127.0.0.1:4224/metrics 2>/dev/null \
+| awk '$1 == "electrs_index_height{type=\\"tip\\"}" { print $2 }' | tail -1)
+TGT=$(curl -s --max-time 5 --user "$(cat ${cookiePath})" -H 'content-type: text/plain;' \
+--data-binary '{"jsonrpc":"1.0","id":"h","method":"getblockchaininfo","params":[]}' \
+http://${bitcoind.rpc}/ 2>/dev/null | sed -n 's/.*"blocks":\\([0-9]*\\).*/\\1/p')
+printf '%s %s' "\${IDX:-}" "\${TGT:-}"`
+
+    const res = await electrsContainer.exec(['bash', '-c', probe], {})
+    if (res.exitCode !== 0) return null
+
+    // Prometheus renders a gauge as a float, so a height can arrive as `7.7e+05`.
+    // Number handles that; parseInt would silently read it as 7.
+    const [rawIndexed, rawTotal] = res.stdout.toString().trim().split(/\s+/)
+    const indexed = Number(rawIndexed)
+    const total = Number(rawTotal)
+    if (
+      !Number.isFinite(indexed) ||
+      !Number.isFinite(total) ||
+      total <= 0 ||
+      indexed < 0
+    ) {
+      return null
+    }
+
+    // Clamped because the two numbers are read a moment apart and from different
+    // services, so a block landing in between can put the index a hair past the
+    // height it was measured against. Both the percentage and the block number are
+    // clamped, for the same reason: "100.2%" and "block 962,700 of 962,698" each
+    // read as a fault rather than as the one-block race they are.
+    const total_ = Math.round(total)
+    return {
+      indexed: Math.min(Math.round(indexed), total_),
+      total: total_,
+      percent: Math.min(100, (indexed / total) * 100).toFixed(1),
+    }
+  }
+
   return sdk.Daemons.of(effects)
     .addDaemon('electrs', {
       subcontainer: electrsContainer,
@@ -307,14 +375,29 @@ printf '%s' "$line"`
           // A built index is never rebuilt, so past the first success the
           // build message would promise a fully-synced user hours of work
           // that is not happening — and send them to reindex a good index.
+          // Asked only once the Electrum probe has already failed, which is the
+          // only time there is anything to report. A synced server answers on the
+          // first attempt and never pays for this.
+          const progress = await readProgress()
+
           return {
             message: everSynced
-              ? i18n(
-                  'Electrs is not responding. It is likely busy indexing; this usually clears on its own.',
-                )
-              : i18n(
-                  'Electrs is building its address index. This can take several hours on first run.',
-                ),
+              ? progress
+                ? i18n(
+                    'Electrs is not responding. It is likely busy indexing, at block ${indexed} of ${total} (${percent}%). This usually clears on its own.',
+                    progress,
+                  )
+                : i18n(
+                    'Electrs is not responding. It is likely busy indexing; this usually clears on its own.',
+                  )
+              : progress
+                ? i18n(
+                    'Electrs is building its address index: ${percent}%, block ${indexed} of ${total}. This can take several hours on first run.',
+                    progress,
+                  )
+                : i18n(
+                    'Electrs is building its address index. This can take several hours on first run.',
+                  ),
             result: 'loading',
           }
         },

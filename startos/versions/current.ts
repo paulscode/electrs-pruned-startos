@@ -1,13 +1,29 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
+const notes =
+  'Sync Progress now says how far along the index actually is, rather than only ' +
+  'that it is building. It reports a percentage and the block it has reached out ' +
+  "of your node's height, and it keeps reporting throughout, including during the " +
+  'long stretches when the server is too busy indexing to answer anything else. ' +
+  ' ' +
+  'That last part is why it could not say before. The check asks the Electrum ' +
+  'server whether it is ready, and during a build that question goes unanswered ' +
+  'for minutes at a time, because the server indexes a whole batch of blocks ' +
+  'before it services any request. The progress figure is read from somewhere ' +
+  'that does answer throughout, so a first index no longer looks the same at hour ' +
+  'one as it does at hour six. ' +
+  ' ' +
+  'Nothing about how the index is built has changed, and nothing new is exposed ' +
+  'outside the service to do this.'
+
 export const current = VersionInfo.of({
-  version: '0.11.1:33',
+  version: '0.11.1:34',
   releaseNotes: {
-    en_US: `Indexes far faster when you run a second, full Bitcoin node on the same server. The two chains share every block below the point they split, so a full node of either one already holds almost everything a pruned node has discarded. Those blocks were being fetched from the network one at a time; they are now read from the other node's disk when it is there. Nothing to configure. An installed second node is found and used automatically, and is checked before it is trusted: one that is itself pruned, or that has not synced far enough, is skipped with the reason in the log. Any block it cannot supply falls back to the network exactly as before, so the worst case is what happens today. The blocks it returns are checked against the hash that was asked for, so a node following the other chain cannot supply the wrong block. If you have only one node, nothing changes.`,
-    es_ES: `Indexes far faster when you run a second, full Bitcoin node on the same server. The two chains share every block below the point they split, so a full node of either one already holds almost everything a pruned node has discarded. Those blocks were being fetched from the network one at a time; they are now read from the other node's disk when it is there. Nothing to configure. An installed second node is found and used automatically, and is checked before it is trusted: one that is itself pruned, or that has not synced far enough, is skipped with the reason in the log. Any block it cannot supply falls back to the network exactly as before, so the worst case is what happens today. The blocks it returns are checked against the hash that was asked for, so a node following the other chain cannot supply the wrong block. If you have only one node, nothing changes.`,
-    de_DE: `Indexes far faster when you run a second, full Bitcoin node on the same server. The two chains share every block below the point they split, so a full node of either one already holds almost everything a pruned node has discarded. Those blocks were being fetched from the network one at a time; they are now read from the other node's disk when it is there. Nothing to configure. An installed second node is found and used automatically, and is checked before it is trusted: one that is itself pruned, or that has not synced far enough, is skipped with the reason in the log. Any block it cannot supply falls back to the network exactly as before, so the worst case is what happens today. The blocks it returns are checked against the hash that was asked for, so a node following the other chain cannot supply the wrong block. If you have only one node, nothing changes.`,
-    pl_PL: `Indexes far faster when you run a second, full Bitcoin node on the same server. The two chains share every block below the point they split, so a full node of either one already holds almost everything a pruned node has discarded. Those blocks were being fetched from the network one at a time; they are now read from the other node's disk when it is there. Nothing to configure. An installed second node is found and used automatically, and is checked before it is trusted: one that is itself pruned, or that has not synced far enough, is skipped with the reason in the log. Any block it cannot supply falls back to the network exactly as before, so the worst case is what happens today. The blocks it returns are checked against the hash that was asked for, so a node following the other chain cannot supply the wrong block. If you have only one node, nothing changes.`,
-    fr_FR: `Indexes far faster when you run a second, full Bitcoin node on the same server. The two chains share every block below the point they split, so a full node of either one already holds almost everything a pruned node has discarded. Those blocks were being fetched from the network one at a time; they are now read from the other node's disk when it is there. Nothing to configure. An installed second node is found and used automatically, and is checked before it is trusted: one that is itself pruned, or that has not synced far enough, is skipped with the reason in the log. Any block it cannot supply falls back to the network exactly as before, so the worst case is what happens today. The blocks it returns are checked against the hash that was asked for, so a node following the other chain cannot supply the wrong block. If you have only one node, nothing changes.`,
+    en_US: notes,
+    es_ES: notes,
+    de_DE: notes,
+    pl_PL: notes,
+    fr_FR: notes,
   },
   migrations: {
     // Nothing to migrate. This version only changes how blocks are fetched during indexing, not

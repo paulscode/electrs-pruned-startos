@@ -25,7 +25,7 @@ An archival node still works normally. Nothing changes for you if you are not pr
 
 1. Install **Bitcoin** first if it isn't already installed. Pruning may be on or off; both work.
 2. Start Electrs Pruned. On first run it will report **Electrum server is starting** until it has bound its port, and it will not begin indexing until your Bitcoin node has completed its initial block download.
-3. Once Bitcoin is fully synced, it will switch to **building its address index**.
+3. Once Bitcoin is fully synced, it will switch to **building its address index**, and **Sync Progress** will show how far it has got: a percentage, and the block it has reached out of your node's height. Those figures keep moving during the build, so you can tell progress from a stall without reading the logs.
 4. When the **Sync Progress** health check reports **Fully synced**, point your wallet at the **Electrum (SSL)** interface — copy the address from the **Interfaces** page rather than typing a port from memory.
 
 ## How long the first index takes
@@ -37,7 +37,7 @@ This depends enormously on **when** you install it, and the difference is hours 
 
 Either way it happens once, and it survives restarts — if it is interrupted it resumes where it left off rather than starting over. But if you are setting up a new node and know you will want an Electrum server, install this one early.
 
-Once that first **Fully synced** appears, the index is built and is never rebuilt. If **Sync Progress** later reports **Electrs is not responding. It is likely busy indexing; this usually clears on its own.**, that is a busy moment — Electrs answers wallet queries only between indexing batches — and it clears by itself, normally within a minute or two. It does not mean the index is being rebuilt, and it is not a reason to reindex.
+Once that first **Fully synced** appears, the index is built and is never rebuilt. If **Sync Progress** later reports that Electrs is not responding and is likely busy indexing, that is a busy moment — Electrs answers wallet queries only between indexing batches — and it clears by itself, normally within a minute or two. It does not mean the index is being rebuilt, and it is not a reason to reindex.
 
 ## What running against a pruned node costs you
 

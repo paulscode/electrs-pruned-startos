@@ -183,6 +183,12 @@ Two checks, and the second one is the interesting one.
 
 That distinction drives the message, too. Before the first success it says the index is building and warns that it takes hours. Afterwards it says electrs is busy and this usually clears on its own — because **a built index is never rebuilt**, and telling a fully-synced user their index is rebuilding would send them to reindex a perfectly good one.
 
+**The percentage comes from a second source, because the first one cannot supply it.** Either message carries `${percent}%, block ${indexed} of ${total}` when both numbers are available. They cannot come from the Electrum RPC: that is precisely what goes unanswered during a build, which is the whole reason the check above is written the way it is. `readProgress` reads `electrs_index_height{type="tip"}` from electrs's Prometheus endpoint on `127.0.0.1:4224`, which is a separate thread and answers throughout, and which electrs sets per block as it indexes rather than once per batch. The endpoint is electrs's own default and is reachable only inside the container; nothing is exposed.
+
+The target has to come from Bitcoin, with `getblockchaininfo` over the same cookie electrs authenticates with, because electrs publishes no metric for it — `index_height` is where indexing has reached, and during a build its header chain stops at the same place, so nothing electrs knows is the finish line.
+
+Both numbers are clamped against each other. They are read a moment apart from two services, so a block landing in between can put the index a hair past the height it was measured against, and "100.2%" or "block 962,700 of 962,698" reads as a fault rather than as the one-block race it is. If either number is missing or unparseable the message falls back to the wording without figures, which is why both forms exist in the dictionary.
+
 ## Backups and Restore
 
 The `main` volume is copied **except the index**, which is excluded.
