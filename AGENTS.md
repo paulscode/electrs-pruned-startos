@@ -54,7 +54,11 @@ still applies; read the upstream repo's notes too when touching shared code.
   and substantially worse over Tor. Indexing *alongside* bitcoind's own sync is far faster, because
   blocks are taken over p2p before they are pruned. Keep `instructions.md` honest about this.
 - **`blockchain.transaction.get` with `verbose=true` fails for pruned blocks.** Its second leg is
-  `getrawtransaction`, which the proxy does not intercept. Known gap, not a regression.
+  `getrawtransaction`. The claim that the proxy does not intercept it is out of date: v0.8.0 does,
+  but only when the call carries a blockhash, and it passes the call through without one. A pruned
+  block still has no blockhash to offer from electrs's side, so the gap stands. Known gap, not a
+  regression. Separately, on a BLAKE2b chain the intercepted form fails too on a stock proxy; see
+  the v2 note below.
 - **This package can index a BLAKE2b chain.** Patches `0004`-`0006` carry the header-v2 support:
   164-byte headers, BLAKE2b block identity, and a replacement for `bsl::Block::visit`, which reads
   the transaction count from a hardcoded offset 80 and silently indexes a v2 block as empty. Pick
@@ -62,15 +66,29 @@ still applies; read the upstream repo's notes too when touching shared code.
   `Bitcoin Knots` when a BLAKE2b build has been sideloaded over the official `bitcoind` (which is
   what Retropex's `knots-startos` release does, taking the `bitcoind` id and keeping the official
   hosts and ports).
-- **Pruning and BLAKE2b compose only until the retained window turns over.** `knots-blake2b` does
-  now ship btc-rpc-proxy, so the earlier note that it shipped none is wrong. What is still true is
-  that no released proxy can serve a **v2** block: our header-v2 support for it is PR #33 and is
-  unmerged, and Retropex's node ships a proxy binary with no BLAKE2b support either. Today every
-  block below a prune height is a pre-fork v1 block, which stock v0.8.0 serves fine, so a pruned
-  BLAKE2b node works. That stops on a schedule: the prune target keeps a fixed number of megabytes,
-  so the retained window moves forward and eventually holds only v2 blocks. At `prune=5000` that is
-  roughly four months from the 2026-08-30 activation. Either #33 lands or we publish our own proxy
-  image before then.
+- **A stock proxy breaks on a v2 block now, not when the pruned window turns over.** An earlier
+  version of this note said the two composed until the retained window filled with v2 blocks, and
+  put that roughly four months past the 2026-08-30 activation. That was wrong, and it is why this
+  was not treated as urgent. The reasoning only covered *fetching* a block from peers. The proxy
+  also **parses** a block it merely forwards, whenever the request is one it intercepts, and stock
+  v0.8.0 cannot parse a 164-byte header. Measured on a live BLAKE2b node against block 962150, which
+  the node still had, so no pruning was involved:
+
+  | request | direct to node | via stock v0.8.0 proxy |
+  | --- | --- | --- |
+  | `getblock <v2> 0` | works | works |
+  | `getblock <v2> 1` | works | `IO error: failed to fill whole buffer` |
+  | `getblock <v1> 1` | works | works |
+  | `getrawtransaction <v2 txid> true <blockhash>` | works | `IO error: failed to fill whole buffer` |
+
+  So verbosity 0 is fine, which is why *indexing* works, and everything verbose fails above block
+  961640. That is Mempool Pruned's whole block path, and this package's own
+  `blockchain.transaction.get` with `verbose=true`.
+
+  Fixed by **`paulscode/btc-rpc-proxy:v0.8.0-blake2b.1`**, built from PR #33
+  (`feat/serve-v2-blocks`), which parses a block as `AnyHeader` so verbosity 1 and
+  `getrawtransaction` work on either header length. Retropex's node still ships a proxy binary with
+  no BLAKE2b support, so a user pointed at that node has the gap regardless of what we ship.
 - **Patches 0002 and 0003 have regtest coverage that lives elsewhere** — the harness in
   [paulscode/electrs-pruned](https://github.com/paulscode/electrs-pruned) (`spikes/harness/`). Run
   `query.py` and `failure_modes.sh` there after any submodule bump. `--fuzz=0` catches context drift;

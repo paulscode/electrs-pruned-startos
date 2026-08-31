@@ -194,7 +194,8 @@ Backing the index up would not be much better than rebuilding it: it is large, i
 ## Limitations and Differences
 
 1. **The index is not backed up**, so a restore means rebuilding it — hours, or far longer on a long-pruned node (see 3).
-2. **`blockchain.transaction.get` with `verbose=true` fails for blocks Bitcoin has pruned.** Its second step is `getrawtransaction`, which the RPC proxy does not intercept. The non-verbose form, which is what wallets normally use, works. Known gap.
+2. **`blockchain.transaction.get` with `verbose=true` fails for blocks Bitcoin has pruned.** Its second step is `getrawtransaction`. The RPC proxy does intercept that, but only when the call carries a blockhash, and a pruned block gives electrs none to pass. The non-verbose form, which is what wallets normally use, works. Known gap.
+   On a BLAKE2b chain the verbose form additionally fails for every block above 961640 unless Bitcoin runs `paulscode/btc-rpc-proxy:v0.8.0-blake2b.1` or later: a stock proxy cannot parse a 164-byte header, so any request it intercepts and parses returns `IO error: failed to fill whole buffer`. This is not limited to pruned blocks.
 3. **First index on an already-pruned node is slow.** Blocks below the prune point are fetched one at a time from network peers — measured ~162 ms each on clearnet, materially worse over Tor. Installing before or during Bitcoin's own sync avoids this almost entirely, because blocks are indexed over the fast local link before pruning discards them.
 4. **Mainnet only.** The network is pinned in the config.
 5. **Most of upstream's configuration is not exposed** — the database directory, the RPC timeout, the server banner, and the block-download wait are all fixed or absent.
