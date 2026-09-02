@@ -45,30 +45,48 @@ ELECTRS_NETWORK_EXPLICIT="${ELECTRS_NETWORK:-}"
 #
 # ELECTRS_NETWORK still wins if it is set explicitly, because an operator who
 # names a chain should not be overridden by a guess.
+# Wait for the cookie rather than exiting the moment it is absent.
+#
+# The node being up is not the same as the node having written its cookie, and on a
+# node restart or update there is a window where the directory is mounted and the
+# file is not. Exiting there means the container restarts, hits the same window, and
+# exits again, so an ordinary node restart turns into a burst of crashes that clears
+# only when the timing happens to work out. Measured on a live node before this was
+# fixed on the StartOS side: five crashes in 36 seconds after a node update.
+#
+# Bounded, and it still exits when the wait runs out, because a cookie that never
+# appears is a real fault worth reporting rather than something to hang on.
 if [ -n "${BITCOIN_COOKIE_DIR:-}" ] && [ -z "${BITCOIN_RPC_COOKIE_FILE:-}" ]; then
-    for probe in \
-        "regtest:regtest" \
-        "testnet4:testnet4" \
-        "testnet3:testnet" \
-        "signet:signet" \
-        ":bitcoin"
-    do
-        sub="${probe%%:*}"
-        net="${probe#*:}"
-        if [ -n "$sub" ]; then
-            candidate="$BITCOIN_COOKIE_DIR/$sub/.cookie"
-        else
-            candidate="$BITCOIN_COOKIE_DIR/.cookie"
-        fi
-        if [ -r "$candidate" ]; then
-            BITCOIN_RPC_COOKIE_FILE="$candidate"
-            [ -n "${ELECTRS_NETWORK_EXPLICIT:-}" ] || ELECTRS_NETWORK="$net"
-            echo "entrypoint: found the node cookie at $candidate, chain $net"
-            break
-        fi
+    waited=0
+    while [ "$waited" -lt 300 ]; do
+        for probe in \
+            "regtest:regtest" \
+            "testnet4:testnet4" \
+            "testnet3:testnet" \
+            "signet:signet" \
+            ":bitcoin"
+        do
+            sub="${probe%%:*}"
+            net="${probe#*:}"
+            if [ -n "$sub" ]; then
+                candidate="$BITCOIN_COOKIE_DIR/$sub/.cookie"
+            else
+                candidate="$BITCOIN_COOKIE_DIR/.cookie"
+            fi
+            if [ -r "$candidate" ]; then
+                BITCOIN_RPC_COOKIE_FILE="$candidate"
+                [ -n "${ELECTRS_NETWORK_EXPLICIT:-}" ] || ELECTRS_NETWORK="$net"
+                echo "entrypoint: found the node cookie at $candidate, chain $net"
+                break
+            fi
+        done
+        [ -n "${BITCOIN_RPC_COOKIE_FILE:-}" ] && break
+        [ "$waited" -eq 0 ] && echo "entrypoint: no .cookie under $BITCOIN_COOKIE_DIR yet; waiting for the node" >&2
+        sleep 1
+        waited=$((waited + 1))
     done
     if [ -z "${BITCOIN_RPC_COOKIE_FILE:-}" ]; then
-        echo "entrypoint: no .cookie under $BITCOIN_COOKIE_DIR yet; the node may still be starting" >&2
+        echo "entrypoint: no .cookie under $BITCOIN_COOKIE_DIR after ${waited}s; is the node running and is the right directory mounted?" >&2
         exit 1
     fi
 fi
