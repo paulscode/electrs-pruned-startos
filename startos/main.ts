@@ -330,7 +330,34 @@ printf '%s %s' "\${IDX:-}" "\${TGT:-}"`
   return sdk.Daemons.of(effects)
     .addDaemon('electrs', {
       subcontainer: electrsContainer,
-      exec: { command: ['electrs'] },
+      // Wait for the node's cookie before starting electrs, rather than starting
+      // and dying on it.
+      //
+      // The dependency is satisfied when the node's container is up, which is not
+      // the same as bitcoind having written its cookie: on a node restart or an
+      // update there is a window where the mount is present and the file is not.
+      // electrs treats that as fatal ("failed to open bitcoind cookie file"), exits
+      // 1, and gets restarted, so every node restart produced a burst of crashes
+      // that cleared only once the timing happened to work out. Observed on a live
+      // node: five crashes in 36 seconds after a node update, and 119 in one hour
+      // during setup.
+      //
+      // Bounded, and it execs anyway when the wait runs out. A cookie that never
+      // appears is a real fault (wrong chain, missing mount, node not running), and
+      // the error electrs gives for it is a better report than hanging here would
+      // be. Waiting is only meant to cover the seconds a restart takes.
+      exec: {
+        command: [
+          'bash',
+          '-c',
+          `for i in $(seq 1 300); do
+  [ -r ${JSON.stringify(cookiePath)} ] && break
+  [ "$i" = 1 ] && echo "waiting for the node's cookie at ${cookiePath}"
+  sleep 1
+done
+exec electrs`,
+        ],
+      },
       ready: {
         display: i18n('Electrum Server'),
         fn: async () => {
@@ -399,6 +426,38 @@ printf '%s' "$line"`
                 everSynced = true
               }
               return { message: i18n('Fully synced'), result: 'success' }
+            }
+          }
+
+          // Before guessing at a cause, find out whether electrs is even running.
+          //
+          // Every failure of the probe above used to be reported as indexing. That
+          // is the right guess while an index is building and the wrong one when the
+          // process has exited: a crash loop on a missing bitcoind cookie reported
+          // "likely busy indexing; this usually clears on its own" for as long as it
+          // lasted, which is advice to wait for something that had already died. The
+          // two are worth telling apart because the remedies are opposites, one being
+          // to wait and the other to look at the logs.
+          //
+          // Read off the port rather than the process table: electrs binds the
+          // listener before it does anything else, so an unbound port means it is not
+          // up, while a bound one that will not answer is the busy case the message
+          // below describes.
+          const listening = await sdk.healthCheck
+            .checkPortListening(effects, port, {
+              successMessage: i18n(
+                'Electrum server is ready and accepting connections',
+              ),
+              errorMessage: i18n('Electrum server is starting'),
+            })
+            .catch(() => null)
+
+          if (listening?.result !== 'success') {
+            return {
+              message: i18n(
+                'Electrs is not running. It exited and is being restarted; if this persists, check the logs.',
+              ),
+              result: 'failure',
             }
           }
 
