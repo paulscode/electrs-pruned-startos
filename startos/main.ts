@@ -126,13 +126,15 @@ export const main = sdk.setupMain(async ({ effects }) => {
   /**
    * Which chain the backend is on, read from its own generated config.
    *
-   * The official package and the pre-RDTS fork are always mainnet, where bitcoind
-   * keeps its data at the datadir root and electrs' `network` is `bitcoin`.
-   * `knots-blake2b` may be either: it offers regtest and, since it repinned to
-   * Knots rc4, mainnet. bitcoind puts a non-mainnet chain's data, its RPC cookie
-   * included, in a subdirectory named for that chain, and electrs has to be told
-   * which network it is on or it comes up with the wrong magic bytes and never
-   * agrees with the node.
+   * Every backend this package offers is mainnet today: the official package
+   * unless its operator chose otherwise, the SHA256 companion always, and
+   * `knots-blake2b` since it dropped its chain selector in 1.0.0:30. bitcoind
+   * puts a non-mainnet chain's data, its RPC cookie included, in a subdirectory
+   * named for that chain, and electrs has to be told which network it is on or
+   * it comes up with the wrong magic bytes and never agrees with the node.
+   *
+   * The probe below stays regardless, because the official package still offers
+   * every chain and an operator can put it on one.
    *
    * Deriving it from the absence of a chain line rather than from the backend id
    * is what made that repin a non-event here: mainnet writes no such line, so it

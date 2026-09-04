@@ -6,9 +6,14 @@ export const shape = z.object({
   auth: z.undefined().catch(undefined),
   // Where the selected backend writes its RPC cookie. Not a literal, because
   // bitcoind keeps a non-mainnet chain's data, cookie included, in a
-  // subdirectory named for that chain: the official package is mainnet and puts
-  // it at the datadir root, while `knots-blake2b` runs regtest or testnet4 and
-  // puts it under `/mnt/bitcoind/regtest/` or `/mnt/bitcoind/testnet4/`.
+  // subdirectory named for that chain: a mainnet node puts it at the datadir
+  // root, a regtest one under `/mnt/bitcoind/regtest/`.
+  //
+  // Every backend offered here is mainnet today, so in practice this is always
+  // the root. It stays derived rather than hardcoded because the official
+  // package still offers every chain. `knots-blake2b` used to be the example of
+  // a non-mainnet backend and is not any more: it dropped its chain selector in
+  // 1.0.0:30.
   // main.ts derives this from the backend's own config; see `backendChain`.
   cookie_file: z.string().catch('/mnt/bitcoind/.cookie'),
   // Dynamic: main.ts writes bitcoind's LXC-bridge host:port at startup (see

@@ -1,28 +1,22 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 const notes =
-  'Stops the Electrum server crash-looping when the node restarts, and stops the ' +
-  'health check blaming indexing for it. ' +
+  'Renames one entry in the Bitcoin service picklist. The pre-RDTS companion ' +
+  'node is now called "Bitcoin Knots (SHA256) Companion", and this picklist and ' +
+  'the dependency prompt follow it. ' +
   ' ' +
-  'The dependency on the node is satisfied when its container is up, which is not ' +
-  'the same as the node having written the credentials file this server reads. On a ' +
-  'node restart or update there is a window where one is true and the other is not, ' +
-  'and the server treated that as fatal and exited. It was restarted, hit the same ' +
-  'window, and exited again, so every node restart produced a burst of crashes that ' +
-  'cleared only once the timing happened to work out. It now waits for the file ' +
-  'before starting, and still reports the error if it never appears. ' +
+  'Only the label changed. It is the same package with the same id, so an ' +
+  'existing selection keeps working and nothing reindexes. ' +
   ' ' +
-  'The Sync Progress check called every failed probe indexing, which is right while ' +
-  'an index is building and wrong when the server has exited. It reported "likely ' +
-  'busy indexing; this usually clears on its own" throughout a crash loop, which is ' +
-  'advice to wait for something that had already died. It now says when the server ' +
-  'is not running, so the two cases can be told apart: one is worth waiting out, the ' +
-  'other is worth reading the logs over. ' +
-  ' ' +
-  'No change to the index. Nothing is rebuilt and no reindex is needed.'
+  'Its description now says what actually distinguishes it: it is a second node ' +
+  'on the same chain as your main Bitcoin service that never enforces BIP-110, ' +
+  'so if the network splits over that rule it follows the side that does not ' +
+  'require it. The old wording said it followed "the chain most hashpower ' +
+  'follows", which is true today and is exactly the thing that would stop being ' +
+  'true in the case the node exists for.'
 
 export const current = VersionInfo.of({
-  version: '0.11.1:36',
+  version: '0.11.1:37',
   releaseNotes: {
     en_US: notes,
     es_ES: notes,

@@ -44,6 +44,10 @@ export default {
     40: 'Un segundo nodo que sigue la cadena que sigue la mayor parte del poder de cómputo, instalado junto a tu servicio principal de Bitcoin.',
     41: 'Un segundo nodo que sigue la cadena BIP-110 (RDTS), instalado junto a tu servicio principal de Bitcoin.',
     42: 'Un nodo en las redes de prueba BLAKE2b, cuyos bloques usan una prueba de trabajo diferente y una cabecera más larga.',
+    // Backend picklist blurb, added with the SHA256 rename. Left in English:
+    // it states which side of a possible consensus split a node follows,
+    // which is not a thing to hand to a translation engine.
+    46: 'A second node on the same chain as your main Bitcoin service, installed alongside it. It never enforces BIP-110, so if the network splits over that rule this one follows the side that does not require it.',
   },
   de_DE: {
     0: 'Starte Electrs!',
@@ -88,6 +92,10 @@ export default {
     40: 'Ein zweiter Knoten, der der Kette folgt, der die meiste Rechenleistung folgt, installiert neben deinem Haupt-Bitcoin-Dienst.',
     41: 'Ein zweiter Knoten, der der BIP-110-Kette (RDTS) folgt, installiert neben deinem Haupt-Bitcoin-Dienst.',
     42: 'Ein Knoten in den BLAKE2b-Testnetzen, dessen Blöcke einen anderen Proof of Work und einen längeren Header verwenden.',
+    // Backend picklist blurb, added with the SHA256 rename. Left in English:
+    // it states which side of a possible consensus split a node follows,
+    // which is not a thing to hand to a translation engine.
+    46: 'A second node on the same chain as your main Bitcoin service, installed alongside it. It never enforces BIP-110, so if the network splits over that rule this one follows the side that does not require it.',
   },
   pl_PL: {
     0: 'Uruchamianie Electrs!',
@@ -132,6 +140,10 @@ export default {
     40: 'Drugi węzeł podążający za łańcuchem, za którym podąża większość mocy obliczeniowej, zainstalowany obok głównej usługi Bitcoin.',
     41: 'Drugi węzeł podążający za łańcuchem BIP-110 (RDTS), zainstalowany obok głównej usługi Bitcoin.',
     42: 'Węzeł w sieciach testowych BLAKE2b, którego bloki używają innego dowodu pracy i dłuższego nagłówka.',
+    // Backend picklist blurb, added with the SHA256 rename. Left in English:
+    // it states which side of a possible consensus split a node follows,
+    // which is not a thing to hand to a translation engine.
+    46: 'A second node on the same chain as your main Bitcoin service, installed alongside it. It never enforces BIP-110, so if the network splits over that rule this one follows the side that does not require it.',
   },
   fr_FR: {
     0: "Démarrage d'Electrs !",
@@ -176,5 +188,9 @@ export default {
     40: 'Un second nœud suivant la chaîne que suit la majorité de la puissance de calcul, installé à côté de votre service Bitcoin principal.',
     41: 'Un second nœud suivant la chaîne BIP-110 (RDTS), installé à côté de votre service Bitcoin principal.',
     42: 'Un nœud sur les réseaux de test BLAKE2b, dont les blocs utilisent une preuve de travail différente et un en-tête plus long.',
+    // Backend picklist blurb, added with the SHA256 rename. Left in English:
+    // it states which side of a possible consensus split a node follows,
+    // which is not a thing to hand to a translation engine.
+    46: 'A second node on the same chain as your main Bitcoin service, installed alongside it. It never enforces BIP-110, so if the network splits over that rule this one follows the side that does not require it.',
   },
 } satisfies Record<string, LangDict>
