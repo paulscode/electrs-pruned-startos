@@ -79,6 +79,9 @@ public `scan_len` and `Transaction`, so no fork was needed and the transaction p
 
 **Retire when:** `bitcoin_slices` learns variable-length headers.
 
+> [!WARNING]
+> **That condition will not be met, and this patch needs rewriting at the next release rather than re-applying.** Upstream `master` has replaced `bitcoin_slices` with [`bindex`](https://crates.io/crates/bindex) (romanz/electrs `0fe14fdf`, "Switch to `bindex`"): `Cargo.toml` on `master` carries `bindex = "0.1.2"` where v0.11.1 carries `bitcoin_slices = "0.10.0"`. `headerv2::visit_block_txs` reimplements `bsl::Block::visit` against that crate's `scan_len` and `Transaction`, so it has nothing to attach to once the dependency is gone. Nothing is released yet — v0.11.1 (2026-02-22) is still the latest tag and `master` is 27 commits past it — so this is a heads-up for the next submodule bump, not a present problem. Checked 2026-09-04.
+
 ## 0005 — a test recording that rust-bitcoin cannot decode a v2 block
 
 No behaviour change. It pins the assumption the other two rest on, and documents why
