@@ -44,6 +44,7 @@ const dict = {
   'Electrs is not responding. It is likely busy indexing, at block ${indexed} of ${total} (${percent}%). This usually clears on its own.': 44,
   'Electrs is not running. It exited and is being restarted; if this persists, check the logs.': 45,
   'A second node on the same chain as your main Bitcoin service, installed alongside it. It never enforces BIP-110, so if the network splits over that rule this one follows the side that does not require it.': 46,
+  'Select Node': 47,
 } as const
 
 /**

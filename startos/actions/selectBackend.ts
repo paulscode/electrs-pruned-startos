@@ -7,7 +7,7 @@ const { InputSpec, Value } = sdk
 
 export const inputSpec = InputSpec.of({
   backend: Value.select({
-    name: i18n('Bitcoin Service'),
+    name: i18n('Select Node'),
     description: i18n(
       'Which Bitcoin service to index. Choose the one whose chain you want this Electrum server to serve.',
     ),
@@ -20,7 +20,7 @@ export const selectBackend = sdk.Action.withInput(
   'select-backend',
 
   async ({ effects }) => ({
-    name: i18n('Select Bitcoin Service'),
+    name: i18n('Select Node'),
     description: i18n(
       'Choose which installed Bitcoin service this Electrum server indexes.',
     ),

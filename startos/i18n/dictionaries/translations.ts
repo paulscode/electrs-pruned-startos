@@ -48,6 +48,7 @@ export default {
     // it states which side of a possible consensus split a node follows,
     // which is not a thing to hand to a translation engine.
     46: 'A second node on the same chain as your main Bitcoin service, installed alongside it. It never enforces BIP-110, so if the network splits over that rule this one follows the side that does not require it.',
+    47: 'Seleccionar nodo',
   },
   de_DE: {
     0: 'Starte Electrs!',
@@ -96,6 +97,7 @@ export default {
     // it states which side of a possible consensus split a node follows,
     // which is not a thing to hand to a translation engine.
     46: 'A second node on the same chain as your main Bitcoin service, installed alongside it. It never enforces BIP-110, so if the network splits over that rule this one follows the side that does not require it.',
+    47: 'Knoten auswählen',
   },
   pl_PL: {
     0: 'Uruchamianie Electrs!',
@@ -144,6 +146,7 @@ export default {
     // it states which side of a possible consensus split a node follows,
     // which is not a thing to hand to a translation engine.
     46: 'A second node on the same chain as your main Bitcoin service, installed alongside it. It never enforces BIP-110, so if the network splits over that rule this one follows the side that does not require it.',
+    47: 'Wybierz węzeł',
   },
   fr_FR: {
     0: "Démarrage d'Electrs !",
@@ -192,5 +195,6 @@ export default {
     // it states which side of a possible consensus split a node follows,
     // which is not a thing to hand to a translation engine.
     46: 'A second node on the same chain as your main Bitcoin service, installed alongside it. It never enforces BIP-110, so if the network splits over that rule this one follows the side that does not require it.',
+    47: 'Sélectionner le nœud',
   },
 } satisfies Record<string, LangDict>
