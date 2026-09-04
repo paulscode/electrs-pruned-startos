@@ -15,7 +15,14 @@ const notes =
   'true in the case the node exists for. ' +
   ' ' +
   'Only labels changed. The packages behind them keep the same ids, so an ' +
-  'existing selection keeps working and nothing reindexes.'
+  'existing selection keeps working and nothing reindexes. ' +
+  ' ' +
+  'The instructions also correct a claim about SSL. They said no plaintext ' +
+  'port is reachable from off the server, so a wallet always needs SSL on. ' +
+  'That holds for LAN, .local and domain addresses, but not for Tor: the Tor ' +
+  'service points an onion at whichever bridge address its SSL toggle selects, ' +
+  'so an onion added with that toggle off carries plain TCP and a wallet using ' +
+  'it needs SSL off.'
 
 export const current = VersionInfo.of({
   version: '0.11.1:38',
