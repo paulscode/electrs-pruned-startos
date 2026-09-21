@@ -11,13 +11,19 @@ const notes =
   'transactions. Sparrow and Electrum both report this as a failure to fetch ' +
   'history. ' +
   ' ' +
-  'The ten seconds could not simply be raised, because a waiting lookup used ' +
-  'to hold up indexing and every other connected wallet with it. Three changes ' +
-  'remove that: each wallet is now answered on its own worker rather than one ' +
-  'at a time, old blocks are fetched several at a time rather than one after ' +
-  'another, and the connection to Bitcoin is a small pool rather than a single ' +
-  'shared socket. With those in place the wait is raised to sixty seconds, ' +
-  'which is long enough for a peer fetch to finish. ' +
+  'Raising the ten seconds on its own would have made every other wallet wait ' +
+  'behind the slow one, so three things changed first: old blocks are now ' +
+  'fetched several at a time rather than one after another, the connection to ' +
+  'Bitcoin is a small pool rather than a single shared socket, and wallets are ' +
+  'answered together rather than in turn, so a round of lookups takes as long ' +
+  'as its slowest wallet instead of all of them added up. With those in place ' +
+  'the wait is raised to sixty seconds, which is long enough for a peer fetch ' +
+  'to finish. ' +
+  ' ' +
+  'One effect to expect: while a wallet is loading history from below the ' +
+  'pruned point, the Sync Progress check can stop answering for the length of ' +
+  'that lookup and report that Electrs is busy. That is the lookup being given ' +
+  'time to finish rather than a problem, and it clears by itself. ' +
   ' ' +
   'Wallets with recent history only were never affected, and are unchanged. ' +
   'Loading long histories over Tor is still slow, just no longer a failure. ' +

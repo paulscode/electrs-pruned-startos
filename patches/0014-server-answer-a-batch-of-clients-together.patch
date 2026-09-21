@@ -1,12 +1,13 @@
-From 8168b21902c4a12467fd1049404ecbfbcacb1a3d Mon Sep 17 00:00:00 2001
+From 24747504ef8875a147a442ebbf87ae573d2d364b Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
-Date: Mon, 21 Sep 2026 09:16:46 -0500
-Subject: [PATCH 14/15] server: answer clients in parallel
+Date: Mon, 21 Sep 2026 10:37:42 -0500
+Subject: [PATCH 14/15] server: answer a batch of clients together
 
-`handle_events` ran inline on the loop that also drives `rpc.sync()`, one client
-after another. On a pruned node a single request can reach for a block the node has
-discarded, which costs seconds rather than milliseconds, so one wallet with deep
-history stalled indexing and every other connected client behind it.
+`handle_events` walked the batch one client after another, so the batch cost the sum
+of its clients. On a pruned node a single request can reach for a block the node has
+discarded, seconds rather than milliseconds, and one wallet with deep history made
+every other client in the batch wait for it in turn. Answered together, a batch costs
+its slowest client instead.
 
 Split the batch in three. Connects and disconnects mutate the peer map, so they stay
 serial, and the clients with work are taken out of the map so each task owns one
@@ -14,32 +15,46 @@ outright. Answering runs across them in parallel, each task touching only its ow
 `Peer` and a shared `&Rpc` -- the same split `notify_peers` has always relied on.
 Survivors go back in the map serially.
 
-Behaviour is unchanged per client: its requests are answered in one batch, in the
+This does *not* take the work off the server loop, and the comments say so. `serve()`
+still calls `handle_events` inline between calls to `rpc.sync()` and does not drain
+`server_rx` again until it returns, so a slow batch still stalls indexing and a
+request arriving mid-batch still waits for that batch to end. Only the cost within a
+batch is addressed here. Moving this onto its own thread is the remaining piece and
+is deliberately not attempted.
+
+Behaviour per client is unchanged: its requests are answered in one batch, in the
 order they arrived, a write error still disconnects it, and a disconnect still
 discards whatever was queued behind it. The folding that carries those two ordering
 rules is now `fold_messages`, which needs no live `Rpc` and so has tests.
 
-Also corrects the write-timeout rationale in `accept_loop`, which described writes
-happening on the server loop. They no longer do, and a wedged peer now holds a
-worker instead -- still worth bounding, for a different reason than before.
+Also corrects the write-timeout rationale in `accept_loop`. A wedged peer now holds a
+worker rather than the loop directly, but the loop waits for that worker, so it still
+holds up everything behind it -- the timeout matters for the same reason as before.
 ---
- src/server.rs | 155 ++++++++++++++++++++++++++++++++++++++++----------
- 1 file changed, 124 insertions(+), 31 deletions(-)
+ src/server.rs | 162 ++++++++++++++++++++++++++++++++++++++++----------
+ 1 file changed, 131 insertions(+), 31 deletions(-)
 
 diff --git a/src/server.rs b/src/server.rs
-index 770dfbf..b14e1cf 100644
+index 770dfbf..7101bdf 100644
 --- a/src/server.rs
 +++ b/src/server.rs
-@@ -180,30 +180,76 @@ enum Message {
+@@ -180,30 +180,83 @@ enum Message {
      Done,
  }
  
-+/// Answer a batch of client requests, one client at a time but several clients at once.
++/// Answer a batch of client requests, one request at a time per client but several clients at once.
 +///
 +/// Answering a request can mean reading a block the node has pruned, which costs seconds rather
-+/// than milliseconds. This runs on the same loop that drives `rpc.sync()`, so doing that one
-+/// client after another lets a single wallet with deep history stall indexing and every other
-+/// connected client behind it. Done a client at a time, the wait a client sees is its own.
++/// than milliseconds. Handled one client after another, a batch cost the *sum* of its clients, so
++/// one wallet with deep history made everyone else in the batch wait for it in turn. Handled
++/// together, the batch costs its slowest client instead.
++///
++/// **This does not take the work off the loop.** `serve()` calls this inline, between calls to
++/// `rpc.sync()`, and does not drain `server_rx` again until it returns. So a slow batch still
++/// stalls indexing for its duration, and a request that arrives once a batch is under way waits
++/// for that batch to finish before it is even looked at. What is fixed here is only the cost
++/// *within* a batch. Moving this onto its own thread, so the loop keeps syncing and accepting
++/// while clients are served, is the remaining piece and is deliberately not attempted here.
 +///
 +/// Split in three, because only the middle part is safe to run in parallel:
 +///   1. serial: apply connects and disconnects, which mutate the map itself, and take the
@@ -118,7 +133,7 @@ index 770dfbf..b14e1cf 100644
              Message::Request(line) => lines.push(line),
              Message::Done => {
                  done = true;
-@@ -211,31 +257,20 @@ fn handle_peer_events(
+@@ -211,31 +264,20 @@ fn handle_peer_events(
              }
          }
      }
@@ -151,15 +166,15 @@ index 770dfbf..b14e1cf 100644
 +        // `Peer::send` uses a blocking `write_all`, so a client that stops
 +        // draining its receive window — gone without a FIN, suspended, or
 +        // behind a stalled proxy — holds whatever thread is writing to it for
-+        // as long as the kernel keeps retrying. `handle_events` now writes from
-+        // a worker rather than the server loop, so that no longer freezes
-+        // indexing outright, but the workers are a shared pool: enough wedged
-+        // peers still starve everyone else. Bound the wait so the existing
-+        // error path can drop just the offending peer instead.
++        // as long as the kernel keeps retrying. `handle_events` writes from a
++        // worker rather than from the server loop, but the loop waits for that
++        // batch to finish, so a wedged peer still holds up `rpc.sync()` and
++        // every client behind it. Bound the wait so the existing error path can
++        // drop just the offending peer instead.
          //
          // `try_clone` below dups the fd, and the option lives on the socket, so
          // setting it here also covers the clone handed to `Peer`.
-@@ -277,3 +312,61 @@ fn recv_loop(peer_id: usize, stream: &TcpStream, server_tx: Sender<Event>) -> Re
+@@ -277,3 +319,61 @@ fn recv_loop(peer_id: usize, stream: &TcpStream, server_tx: Sender<Event>) -> Re
      server_tx.send(Event { peer_id, msg })?;
      Ok(())
  }

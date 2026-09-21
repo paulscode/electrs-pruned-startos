@@ -1,0 +1,297 @@
+From 0b166c37b41c722ca6974f52e02e4df5b046e4c7 Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Mon, 21 Sep 2026 10:37:51 -0500
+Subject: [PATCH 15/15] daemon: make the serving retry budget a real bound
+
+Two problems, one fix.
+
+`RETRY_BUDGET_QUERY` was 10s against a default `jsonrpc_timeout` of 15s, which made
+it a no-retry policy without looking like one. `retry_rpc` checks its deadline only
+after an attempt returns, so the budget was always spent before the first attempt
+could fail, and every failure gave up immediately. That is why a wallet with history
+below the prune height failed outright rather than waiting. Underneath it, electrs
+stopped waiting at 15s while the proxy keeps working on the block until its own
+`peer_timeout`, 30s by default, and caches what it fetches -- so the fetch being
+abandoned was often one the proxy went on to complete.
+
+Raise it to 60s, which spans several attempts and reaches past that 30s, so a later
+attempt picks up the block an earlier one gave up on. A proxy that also collapses
+concurrent requests for the same block turns that into a join rather than a second
+fetch: an improvement, not a requirement.
+
+But a budget raised that way does not bound what it claims to. One run of blocks is
+several RPCs -- read the prune height, resolve every height, fetch each block -- and
+each retried on its own fresh budget. Against a source that is entirely down, and on
+a pruned node one process answers all three, 60s became three 60s waits in series.
+That is most of the way back to the five-minute freeze the two budgets were split up
+to prevent, and it would have been a regression on the 10s rather than a fix.
+
+So how the allowance is spent is now explicit. Serving takes one deadline for the
+whole run: a failing run gives up once, not once per stage. Indexing keeps a fresh
+budget per call, because there the allowance exists to ride out a restart of the
+block source rather than to bound a wait, and a 2000-block batch over Tor takes
+longer than any sane budget -- charging successful fetches against it would leave the
+last blocks in a batch unable to survive a blip the first ones would have.
+
+Sharing the deadline costs nothing on the serving path. It is only ever read after a
+call has already failed, so a slow but working query still runs to completion however
+long it takes.
+
+What waiting costs is stated in the comment rather than waved away. The preceding
+commit makes a batch cost its slowest client instead of the sum, but `handle_events`
+still runs inline on the loop that drives `rpc.sync()`, so raising this raises the
+worst-case indexing stall with it. Deliberate: the stall is bounded, nothing is lost
+because indexing resumes where it was, and it only happens when fetches are genuinely
+failing -- against which the 10s bought a wallet that could not load its history.
+---
+ src/daemon.rs | 168 +++++++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 153 insertions(+), 15 deletions(-)
+
+diff --git a/src/daemon.rs b/src/daemon.rs
+index d6159c5..f970559 100644
+--- a/src/daemon.rs
++++ b/src/daemon.rs
+@@ -375,12 +375,73 @@ pub struct Daemon {
+ /// riding out a real misconfiguration — past this, failing loudly is more useful
+ /// than stalling silently, and the index on disk is still valid to resume from.
+ const RETRY_BUDGET_INDEXING: Duration = Duration::from_secs(300);
+-/// Serving a client cannot. `handle_events` and `rpc.sync()` share one thread
+-/// (`server.rs`), so a query that waits also freezes indexing and every other
+-/// client. A prompt error the wallet can retry beats a five-minute freeze.
+-const RETRY_BUDGET_QUERY: Duration = Duration::from_secs(10);
++/// Serving a client can afford to wait, but less.
++///
++/// This used to be 10s, and 10s was below `jsonrpc_timeout` (15s by default), which made it
++/// silently a no-retry policy: `retry_rpc` checks its deadline only after an attempt returns, so
++/// the budget was always spent before the first attempt could fail and the deadline check fired
++/// on the first error every time. That is what made a wallet with history below the prune height
++/// fail outright rather than wait.
++///
++/// **What waiting still costs.** `handle_events` runs inline on the `server.rs` loop that also
++/// drives `rpc.sync()`. Answering the clients within one batch is parallel, so a batch costs its
++/// slowest client rather than the sum of them, but the loop is still held for that long: a slow
++/// query stalls indexing, and a request arriving mid-batch waits for the batch to end. Raising
++/// this from 10s to 60s therefore raises the worst-case stall with it. Taking the work off that
++/// loop entirely is the fix, and it is not done here.
++///
++/// That trade is deliberate. The stall is bounded, costs nothing permanent -- indexing resumes
++/// from where it was -- and only happens when fetches are actually failing, whereas the 10s
++/// bought a wallet that could not load its history at all.
++///
++/// Sized against what is on the other end. A single attempt is capped by `jsonrpc_timeout`, but
++/// the proxy in front of a pruned node keeps working on the block for its own `peer_timeout` (30s
++/// by default) after we have stopped waiting, and it caches what it fetches. So the budget is set
++/// to span several attempts and reach past that 30s: a later attempt picks up the block the
++/// earlier one gave up on. A proxy that also collapses concurrent requests for the same block
++/// makes that a join rather than a second fetch, which is a further improvement and not a
++/// requirement.
++///
++/// Spent as one allowance for the whole run rather than per call -- see [`Retry`]. A run reads the
++/// prune height, resolves heights, and fetches each block, and giving each of those its own fresh
++/// 60s would mean a source that is entirely down costs three waits in series rather than one.
++const RETRY_BUDGET_QUERY: Duration = Duration::from_secs(60);
+ const RPC_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+ 
++/// How the allowance above is spent across the several RPCs one run of blocks needs.
++///
++/// A run is not one call. It reads the prune height, resolves every block's height, and then
++/// fetches each block, and each of those retries on its own. Giving all of them the same fresh
++/// budget multiplies it: against a source that is entirely down -- which on a pruned node is one
++/// process answering all three -- a 60s allowance becomes three 60s waits in series. That is
++/// most of the way back to the five-minute freeze the two budgets were split up to prevent.
++#[derive(Clone, Copy)]
++enum Retry {
++    /// One deadline covering the whole run.
++    ///
++    /// For serving, where what is being bounded is how long the `server.rs` loop is held. A run
++    /// that is failing gives up once, not once per stage. Time spent succeeding counts against it,
++    /// which costs nothing: the deadline is only ever read after a call has already failed, so a
++    /// slow but working query runs to completion however long it takes.
++    WholeRun { deadline: Instant },
++    /// A fresh budget for each call.
++    ///
++    /// For indexing, where the allowance exists to ride out a restart of the block source rather
++    /// than to bound a wait. A batch of 2000 blocks over Tor takes longer than any sane budget, so
++    /// charging successful fetches against it would mean the last blocks in a batch could not
++    /// survive a blip the first ones would have.
++    PerCall { budget: Duration },
++}
++
++impl Retry {
++    fn deadline(self) -> Instant {
++        match self {
++            Retry::WholeRun { deadline } => deadline,
++            Retry::PerCall { budget } => Instant::now() + budget,
++        }
++    }
++}
++
+ /// How many RPC connections to the node to keep.
+ ///
+ /// Each one is a socket, and each is a slot for work that would otherwise queue behind whatever
+@@ -533,10 +594,10 @@ impl Daemon {
+     fn retry_rpc<T>(
+         &self,
+         what: &str,
+-        budget: Duration,
++        deadline: Instant,
+         mut f: impl FnMut() -> Result<T>,
+     ) -> Result<T> {
+-        let deadline = Instant::now() + budget;
++        let started = Instant::now();
+         let mut delay = Duration::from_secs(1);
+         let mut attempt = 0usize;
+         loop {
+@@ -553,7 +614,7 @@ impl Daemon {
+                             format!(
+                                 "{} still failing after {}s of retries",
+                                 what,
+-                                budget.as_secs()
++                                started.elapsed().as_secs()
+                             )
+                         });
+                     }
+@@ -743,7 +804,13 @@ impl Daemon {
+         B: IntoIterator<Item = BlockHash>,
+         F: FnMut(BlockHash, SerBlock),
+     {
+-        self.for_blocks_with(blockhashes, func, RETRY_BUDGET_QUERY)
++        self.for_blocks_with(
++            blockhashes,
++            func,
++            Retry::WholeRun {
++                deadline: Instant::now() + RETRY_BUDGET_QUERY,
++            },
++        )
+     }
+ 
+     /// Blocks for building the index. Retries patiently — see
+@@ -753,10 +820,16 @@ impl Daemon {
+         B: IntoIterator<Item = BlockHash>,
+         F: FnMut(BlockHash, SerBlock),
+     {
+-        self.for_blocks_with(blockhashes, func, RETRY_BUDGET_INDEXING)
++        self.for_blocks_with(
++            blockhashes,
++            func,
++            Retry::PerCall {
++                budget: RETRY_BUDGET_INDEXING,
++            },
++        )
+     }
+ 
+-    fn for_blocks_with<B, F>(&self, blockhashes: B, mut func: F, budget: Duration) -> Result<()>
++    fn for_blocks_with<B, F>(&self, blockhashes: B, mut func: F, retry: Retry) -> Result<()>
+     where
+         B: IntoIterator<Item = BlockHash>,
+         F: FnMut(BlockHash, SerBlock),
+@@ -781,8 +854,8 @@ impl Daemon {
+             return Ok(());
+         }
+         let prune_height =
+-            self.retry_rpc("reading prune height", budget, || self.prune_height())?;
+-        let heights = self.retry_rpc("resolving block heights", budget, || {
++            self.retry_rpc("reading prune height", retry.deadline(), || self.prune_height())?;
++        let heights = self.retry_rpc("resolving block heights", retry.deadline(), || {
+             self.block_heights(&blockhashes)
+         })?;
+ 
+@@ -822,7 +895,7 @@ impl Daemon {
+                 pipeline(
+                     run,
+                     FETCH_CONCURRENCY,
+-                    |i, &hash| self.fetch_pruned_block(hash, heights[start + i], budget),
++                    |i, &hash| self.fetch_pruned_block(hash, heights[start + i], retry),
+                     |&hash, block| {
+                         func(hash, block);
+                         Ok(())
+@@ -854,12 +927,12 @@ impl Daemon {
+         &self,
+         hash: BlockHash,
+         height: usize,
+-        budget: Duration,
++        retry: Retry,
+     ) -> Result<SerBlock> {
+         if let Some(block) = self.block_from_helper(hash, height) {
+             return Ok(block);
+         }
+-        self.retry_rpc(&format!("fetching pruned block {}", hash), budget, || {
++        self.retry_rpc(&format!("fetching pruned block {}", hash), retry.deadline(), || {
+             self.get_block_raw_rpc(hash)
+         })
+         .with_context(|| {
+@@ -1042,6 +1115,71 @@ mod tests {
+         assert_eq!(info.prune_height, None);
+     }
+ 
++    /// Serving spends one allowance across the whole run; indexing gets a fresh one per call.
++    ///
++    /// The distinction is the whole reason `Retry` exists. A run is several RPCs, so a per-call
++    /// budget on the serving path multiplies into that many waits in series against a source that
++    /// is down, which is what the serving budget is there to bound.
++    #[test]
++    fn serving_shares_one_deadline_while_indexing_renews_it() {
++        use std::time::{Duration, Instant};
++
++        let fixed = Instant::now() + Duration::from_secs(60);
++        let whole = super::Retry::WholeRun { deadline: fixed };
++        assert_eq!(whole.deadline(), fixed, "the run shares one deadline");
++        std::thread::sleep(Duration::from_millis(10));
++        assert_eq!(whole.deadline(), fixed, "and it does not move as the run goes on");
++
++        let per_call = super::Retry::PerCall {
++            budget: Duration::from_secs(300),
++        };
++        let first = per_call.deadline();
++        std::thread::sleep(Duration::from_millis(10));
++        assert!(
++            per_call.deadline() > first,
++            "each indexing call starts its allowance afresh"
++        );
++    }
++
++    /// The budget has to outlast a failed attempt, or it is a no-retry policy wearing a retry's
++    /// clothes: `retry_rpc` checks the deadline only after an attempt returns, so a budget
++    /// shorter than one attempt gives up on the first error every time. That is what 10s did.
++    #[test]
++    fn the_query_budget_outlasts_a_stalled_fetch() {
++        use std::time::Duration;
++
++        // Both defaults live outside this file: `jsonrpc_timeout_secs` is 15 in
++        // internal/config_specification.toml, and btc-rpc-proxy's `peer_timeout` is 30 in its
++        // config_spec.toml. Named here so putting the budget back under either fails loudly.
++        const ATTEMPT: Duration = Duration::from_secs(15);
++        const PROXY_PEER_TIMEOUT: Duration = Duration::from_secs(30);
++
++        let budget = super::RETRY_BUDGET_QUERY;
++        assert!(budget > ATTEMPT, "a budget under one attempt never retries");
++
++        // Walk the loop `retry_rpc` runs: attempt, check the deadline, back off, repeat.
++        let mut elapsed = Duration::ZERO;
++        let mut delay = Duration::from_secs(1);
++        let mut attempts = 0;
++        loop {
++            elapsed += ATTEMPT;
++            attempts += 1;
++            if elapsed >= budget {
++                break;
++            }
++            elapsed += delay;
++            delay *= 2;
++        }
++
++        assert!(attempts >= 2, "only {} attempt(s) fit the budget", attempts);
++        assert!(
++            elapsed > PROXY_PEER_TIMEOUT,
++            "gave up after {:?}, before the proxy stops working on the block at {:?}",
++            elapsed,
++            PROXY_PEER_TIMEOUT
++        );
++    }
++
+     /// Delivery follows the request order whatever order the fetches finish in, and no more
+     /// than `concurrency` run at once. Both matter: callers accumulate state through `deliver`,
+     /// and the bound is what keeps a run of thousands of megabyte blocks from being held at once.
+-- 
+2.43.0
+

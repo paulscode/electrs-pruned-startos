@@ -20,8 +20,8 @@ chain that never sets bit 31 every path is the v1 one.
 `0008` through `0011` are the archival-block helper and the fixes to it, plus tolerating a node that
 no longer reports `difficulty`. `0012` through `0015` are throughput: they exist because a pruned
 node's block reads cost seconds rather than milliseconds, and the serving path was built for the
-latter. Read them together — `0015` raises a timeout that is only safe to raise because `0014`
-changed what waiting costs.
+latter. Read them together, and read `0014` before `0015`: `0015` raises a timeout, `0014` reduces
+what waiting on it costs, and neither is the whole story on its own.
 
 **These files are generated, not edited.** They come from `git format-patch` over the commits in the
 `electrs-pruned` repo's `vendor/electrs`, which is the single source for this fork. Edit there, run the
@@ -62,8 +62,9 @@ Retries with exponential backoff, on a budget that differs by caller. An interme
 one 300s budget everywhere, and a single query against a downed proxy froze the whole server for
 five minutes, because `handle_events` and `rpc.sync()` shared one thread. Indexing waits 300s.
 
-Serving waited 10s for the same reason, until `0014` gave each query its own worker and `0015`
-raised it to 60s — see those entries for why 10s had stopped being a trade-off and become a bug.
+Serving waited 10s for the same reason, until `0015` raised it to 60s — see that entry for why 10s
+had stopped being a trade-off and become a bug. Note that `0014` reduced what waiting costs but did
+not remove it: the loop is still held for the length of a batch.
 
 **Retire when:** 0002 is upstreamed, since this is a fix to it rather than to upstream.
 
@@ -117,9 +118,9 @@ Inherited unchanged from `Start9-Community/electrs-startos`. Sets a 60s `SO_SNDT
 client sockets, so a client that stops draining its receive window cannot hold the thread writing
 to it for as long as the kernel keeps retransmitting.
 
-Originally that thread was the single `serve()` loop, which also runs `rpc.sync()`, so one wedged
-client froze everything. Since `0014` it is a worker instead — still worth bounding, because the
-workers are a shared pool and enough wedged peers still starve the rest.
+Since `0014` that thread is a worker rather than the `serve()` loop itself, but the loop waits for
+the worker, so a wedged client still holds up `rpc.sync()` and every client behind it. The reason
+for bounding it is unchanged.
 
 **Retire when:** upstream sets a write timeout (or makes the response write non-blocking) and the
 submodule is bumped past it. Tracked at
@@ -216,23 +217,33 @@ batching implementation, which is why it is there.
 
 **Retire when:** upstream fetches concurrently.
 
-## 0014 — answer clients in parallel
+## 0014 — answer a batch of clients together
 
-`handle_events` ran inline on the loop that also drives `rpc.sync()`, one client after another, so a
-single request that reached for a pruned block stalled indexing and every other connected client
-behind it. Split into three phases: connects and disconnects stay serial because they mutate the
-peer map, answering runs across clients in parallel, survivors go back in the map serially. That is
-the same split `notify_peers` upstream has always used.
+`handle_events` walked its batch one client after another, so the batch cost the *sum* of its
+clients and one request reaching for a pruned block made every other client in the batch wait for it
+in turn. Split into three phases: connects and disconnects stay serial because they mutate the peer
+map, answering runs across clients in parallel, survivors go back in the map serially. That is the
+same split `notify_peers` upstream has always used. A batch now costs its slowest client.
+
+> [!IMPORTANT]
+> **This does not take the work off the server loop.** `serve()` still calls `handle_events` inline
+> between calls to `rpc.sync()`, and does not drain `server_rx` again until it returns. So a slow
+> batch still stalls indexing for its duration, and a request arriving once a batch is under way
+> still waits for that batch to end. Only the cost *within* a batch is addressed. That is why
+> `0015` raising the serving budget to 60s raises the worst-case indexing stall with it, which is
+> a deliberate trade and not an oversight. Moving this work onto its own thread is the remaining
+> piece and is not attempted here.
 
 Per client nothing changes: its requests are answered in one batch, in arrival order, and a
 disconnect still discards whatever was queued behind it.
 
-This is also what makes `0007`'s write timeout matter for a different reason than it used to — a
-wedged peer now holds a worker rather than the server loop.
+`0007`'s write timeout still matters for the reason it always did. A wedged peer holds a worker
+rather than the loop directly, but the loop waits for that worker, so it holds up everything behind
+it either way.
 
 **Retire when:** upstream stops serving clients from the sync loop.
 
-## 0015 — let a query retry a pruned block
+## 0015 — make the serving retry budget a real bound
 
 The serving budget from `0002` was 10s against a default `jsonrpc_timeout` of 15s, which made it a
 no-retry policy without looking like one: the deadline is only checked after an attempt returns, so
@@ -241,7 +252,26 @@ stopped waiting at 15s while the proxy keeps working on the block until its own 
 by default — so the fetch being abandoned was often one the proxy went on to complete.
 
 Raised to 60s, which spans several attempts and reaches past the point the proxy gives up on its
-own. Safe only because of `0014`: a query that waits no longer freezes the server.
+own.
+
+A budget raised that way would not have bounded what it claims to, so how it is spent is now
+explicit. One run of blocks is several RPCs — read the prune height, resolve every height, fetch
+each block — each retried on its own fresh budget. Against a source that is entirely down, and on a
+pruned node one process answers all three, 60s became three 60s waits in series: most of the way
+back to the five-minute freeze the two budgets were split up to prevent, and a regression on the 10s
+rather than a fix. Serving now takes **one deadline for the whole run** and gives up once rather
+than once per stage. Indexing keeps a fresh budget per call, because there the allowance is for
+riding out a restart of the block source, and a 2000-block batch over Tor outlasts any sane budget —
+charging successful fetches against it would leave the last blocks unable to survive a blip the
+first ones would have. Sharing the deadline costs serving nothing, since it is only read after a
+call has already failed: a slow but working query still runs to completion however long it takes.
+
+What that costs is stated rather than waved away. `0014` makes a batch cost its slowest client
+instead of the sum, but `handle_events` still runs inline on the loop that drives `rpc.sync()`, so
+going from 10s to 60s raises the worst-case indexing stall to match. The trade is deliberate: the
+stall is bounded, nothing is lost because indexing resumes where it was, and it only happens when
+fetches are genuinely failing. Against that, the 10s bought a wallet that could not load its history
+at all.
 
 A retry is also meant to be nearly free, because btc-rpc-proxy collapses concurrent requests for the
 same block and a retry therefore joins the fetch already in flight rather than starting a second
