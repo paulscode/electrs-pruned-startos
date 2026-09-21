@@ -22,7 +22,7 @@ const notes =
   'updating is all that is required.'
 
 export const current = VersionInfo.of({
-  version: '0.11.1:39',
+  version: '0.11.1:40',
   releaseNotes: {
     en_US: notes,
     es_ES: notes,

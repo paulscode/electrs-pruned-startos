@@ -1,0 +1,165 @@
+From 37e058d008cc5e26d7410769f430ea173c945f28 Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Mon, 21 Sep 2026 00:12:57 -0500
+Subject: [PATCH 9/9] daemon: tolerate a getblockchaininfo without difficulty
+
+bitcoincore-rpc's GetBlockchainInfoResult declares difficulty as a required
+f64. Bitcoin Knots 29.4.2.knots20260508 (knots#420) stopped reporting that
+field for header-v2 blocks, on the grounds that a BLAKE2b difficulty and a
+SHA256d one are different units and cannot be compared. On a BLAKE2b chain
+every block above the activation is header-v2, so the field is simply absent
+and serde rejects the whole response.
+
+The result is an indexer that cannot start: rpc_poll fails, and the failure is
+reported as "daemon not available", which sends whoever reads the log looking
+at their node rather than at a deserializer three crates away.
+
+Deserialize only the five fields this indexer reads, none of which is
+difficulty, and ignore the rest. A node that still reports it is unaffected,
+which is every SHA256d chain.
+---
+ src/daemon.rs | 90 ++++++++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 82 insertions(+), 8 deletions(-)
+
+diff --git a/src/daemon.rs b/src/daemon.rs
+index f3d6632..e0218ae 100644
+--- a/src/daemon.rs
++++ b/src/daemon.rs
+@@ -6,7 +6,7 @@ use bitcoin::{Amount, BlockHash, Transaction, Txid};
+ use bitcoincore_rpc::{json, jsonrpc, Auth, Client, RpcApi};
+ use crossbeam_channel::Receiver;
+ use parking_lot::Mutex;
+-use serde::Serialize;
++use serde::{Deserialize, Serialize};
+ use serde_json::{json, value::RawValue, Value};
+ 
+ use std::fs::File;
+@@ -26,13 +26,42 @@ use crate::{
+     types::SerBlock,
+ };
+ 
++/// The subset of `getblockchaininfo` this indexer actually reads.
++///
++/// Deserialized here rather than through `bitcoincore-rpc`'s `GetBlockchainInfoResult`, which
++/// declares `difficulty` as a required `f64`. Bitcoin Knots 29.4.2.knots20260508 (knots#420)
++/// stopped reporting that field for header-v2 blocks, on the grounds that a BLAKE2b difficulty
++/// and a SHA256d one are different units; on a BLAKE2b chain every block above the activation
++/// is header-v2, so the field is simply absent and serde fails the whole response. The failure
++/// surfaces as "daemon not available", which sends the caller looking at the node rather than
++/// at the deserializer.
++///
++/// Only the fields below are ever used, and none of them is difficulty. Unknown fields are
++/// ignored, so a node that still sends it, or adds anything else, is fine.
++#[derive(Debug, Deserialize)]
++pub(crate) struct BlockchainInfo {
++    pub blocks: u64,
++    pub headers: u64,
++    #[serde(rename = "initialblockdownload", default)]
++    pub initial_block_download: bool,
++    #[serde(default)]
++    pub pruned: bool,
++    #[serde(rename = "pruneheight")]
++    pub prune_height: Option<u64>,
++}
++
++/// `getblockchaininfo`, tolerant of a missing `difficulty`. See [`BlockchainInfo`].
++fn get_blockchain_info(client: &Client) -> bitcoincore_rpc::Result<BlockchainInfo> {
++    client.call::<BlockchainInfo>("getblockchaininfo", &[])
++}
++
+ enum PollResult {
+     Done(Result<()>),
+     Retry,
+ }
+ 
+ fn rpc_poll(client: &mut Client, skip_block_download_wait: bool) -> PollResult {
+-    match client.get_blockchain_info() {
++    match get_blockchain_info(client) {
+         Ok(info) => {
+             if skip_block_download_wait {
+                 // bitcoind RPC is available, don't wait for block download to finish
+@@ -217,7 +246,7 @@ impl Daemon {
+         if !network_info.network_active {
+             bail!("electrs requires active bitcoind p2p network");
+         }
+-        let info = rpc.get_blockchain_info()?;
++        let info = get_blockchain_info(&rpc)?;
+         if info.pruned {
+             // Upstream refuses here. We accept, because `for_blocks` routes
+             // blocks bitcoind no longer holds to `getblock <hash> 0` instead of
+@@ -248,7 +277,7 @@ impl Daemon {
+         let helper = match (pruned, &config.helper) {
+             (false, _) | (_, None) => None,
+             (true, Some((addr, cookie))) => match connect_helper(*addr, cookie, config) {
+-                Ok(client) => match client.get_blockchain_info() {
++                Ok(client) => match get_blockchain_info(&client) {
+                     Ok(h) if h.pruned => {
+                         warn!("ignoring the pruned-block helper at {}: it is pruned too, so it holds none of the blocks this node is missing", addr);
+                         None
+@@ -646,10 +675,7 @@ impl Daemon {
+     /// rather than cached: it advances as bitcoind prunes, and reading a stale
+     /// value low would route a since-pruned block to p2p and hang.
+     fn prune_height(&self) -> Result<usize> {
+-        let info = self
+-            .rpc
+-            .get_blockchain_info()
+-            .context("failed to get prune height")?;
++        let info = get_blockchain_info(&self.rpc).context("failed to get prune height")?;
+         Ok(info.prune_height.unwrap_or(0) as usize)
+     }
+ 
+@@ -720,3 +746,51 @@ where
+         Err(err) => bail!("batch {} request failed: {}", name, err),
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::BlockchainInfo;
++
++    /// A Knots node on a BLAKE2b chain omits `difficulty` entirely (knots#420). Deserializing
++    /// through `bitcoincore-rpc`'s own type fails here, which is what took indexers down when
++    /// that release shipped, reported only as "daemon not available".
++    #[test]
++    fn blockchain_info_without_difficulty() {
++        let json = r#"{
++            "chain": "main", "blocks": 973329, "headers": 973329,
++            "bestblockhash": "0000000000000000a56a915d40e037c745b3c85b128b46a66d924468cbee43b9",
++            "difficulty_blake2b": 1234.5, "mediantime": 1758430000,
++            "verificationprogress": 1.0, "initialblockdownload": false,
++            "chainwork": "00", "size_on_disk": 1, "pruned": true, "pruneheight": 961000
++        }"#;
++        let info: BlockchainInfo = serde_json::from_str(json).expect("must parse without difficulty");
++        assert_eq!(info.blocks, 973329);
++        assert_eq!(info.headers, 973329);
++        assert!(!info.initial_block_download);
++        assert!(info.pruned);
++        assert_eq!(info.prune_height, Some(961000));
++    }
++
++    /// A node that still reports it, which is any SHA256d chain, must keep working unchanged.
++    #[test]
++    fn blockchain_info_with_difficulty() {
++        let json = r#"{
++            "chain": "main", "blocks": 10, "headers": 12, "difficulty": 1.0,
++            "initialblockdownload": true, "pruned": false
++        }"#;
++        let info: BlockchainInfo = serde_json::from_str(json).expect("must parse with difficulty");
++        assert_eq!(info.blocks, 10);
++        assert_eq!(info.headers, 12);
++        assert!(info.initial_block_download);
++        assert!(!info.pruned);
++        assert_eq!(info.prune_height, None);
++    }
++
++    /// An unpruned node omits `pruneheight`, and prune_height() maps that to zero.
++    #[test]
++    fn missing_prune_height_is_none() {
++        let json = r#"{"chain":"main","blocks":1,"headers":1,"pruned":false}"#;
++        let info: BlockchainInfo = serde_json::from_str(json).expect("must parse minimal");
++        assert_eq!(info.prune_height.unwrap_or(0), 0);
++    }
++}
+-- 
+2.43.0
+
