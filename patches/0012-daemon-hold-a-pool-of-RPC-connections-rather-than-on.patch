@@ -1,0 +1,335 @@
+From c85f579a05efe792e3f4a4cd4288a22acf074cd3 Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Mon, 21 Sep 2026 08:36:10 -0500
+Subject: [PATCH 12/15] daemon: hold a pool of RPC connections rather than one
+
+`jsonrpc`'s transport keeps a single socket behind a mutex, so every call on a
+`Client` waits for the one before it. On a single-threaded server that costs
+nothing and is invisible. It is also the ceiling on anything that tries to
+overlap: asking for four pruned blocks at once on a shared client takes exactly
+as long as asking for them one after another, so concurrency added anywhere
+above this layer would have bought nothing.
+
+Four connections, each with its own socket, handed out per call and returned on
+drop. The size is deliberate rather than generous: a slot in use can become peer
+connections opened by the proxy in front of a pruned node, and a node has only
+so many peers worth asking, so the throttle belongs here where the work is
+issued rather than downstream where it would be discovered.
+
+The connection that ran the startup checks becomes the first of the pool, so the
+node that answered them is the node the pool talks to.
+
+This is groundwork: nothing yet issues concurrent calls. What it removes is the
+reason doing so would not have helped.
+---
+ src/daemon.rs | 174 +++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 166 insertions(+), 8 deletions(-)
+
+diff --git a/src/daemon.rs b/src/daemon.rs
+index 2b8565d..3c83a25 100644
+--- a/src/daemon.rs
++++ b/src/daemon.rs
+@@ -200,9 +200,80 @@ fn rpc_connect(config: &Config) -> Result<Client> {
+     )))
+ }
+ 
++
++/// A handful of RPC connections, handed out one at a time.
++///
++/// `jsonrpc`'s transport holds a single socket behind a mutex, so concurrent calls on one `Client`
++/// queue up and finish one after another. That is invisible while everything runs on one thread,
++/// and becomes the ceiling the moment anything tries to overlap: asking for four pruned blocks at
++/// once on a shared client costs exactly what asking for them in turn costs. Each client here owns
++/// its own socket, so a checkout is a real parallel slot.
++///
++/// Sized rather than unbounded on purpose. Every slot in use can become peer connections opened by
++/// the proxy on the other side, so this is the throttle for the whole chain, and it is better set
++/// here — where the work is issued — than discovered downstream.
++pub(crate) struct Pool<T> {
++    ready: crossbeam_channel::Receiver<T>,
++    idle: crossbeam_channel::Sender<T>,
++}
++
++pub(crate) type ClientPool = Pool<Client>;
++
++impl<T> Pool<T> {
++    fn new(size: usize, mut make: impl FnMut() -> Result<T>) -> Result<Self> {
++        let size = size.max(1);
++        let (idle, ready) = crossbeam_channel::bounded(size);
++        for _ in 0..size {
++            idle.send(make()?)
++                .expect("the receiver is held by the pool being built");
++        }
++        Ok(Pool { ready, idle })
++    }
++
++    /// Takes a connection, waiting for one if they are all busy.
++    ///
++    /// Waiting is the intended behaviour rather than a fallback: the alternative is opening
++    /// connections without limit under load, which moves the problem to the node.
++    fn get(&self) -> Pooled<'_, T> {
++        let client = self
++            .ready
++            .recv()
++            .expect("the sender is held by the pool, so this cannot disconnect");
++        Pooled {
++            client: Some(client),
++            idle: &self.idle,
++        }
++    }
++}
++
++pub(crate) struct Pooled<'a, T> {
++    client: Option<T>,
++    idle: &'a crossbeam_channel::Sender<T>,
++}
++
++impl<T> std::ops::Deref for Pooled<'_, T> {
++    type Target = T;
++    fn deref(&self) -> &T {
++        self.client
++            .as_ref()
++            .expect("taken only by Drop, which consumes self")
++    }
++}
++
++impl<T> Drop for Pooled<'_, T> {
++    fn drop(&mut self) {
++        if let Some(client) = self.client.take() {
++            // Returned even after a failed call. A connection that erred is still usable: the
++            // transport drops its socket on error and opens a fresh one on the next request.
++            let _ = self.idle.send(client);
++        }
++    }
++}
++
+ pub struct Daemon {
+     p2p: Mutex<Connection>,
+-    rpc: Client,
++    /// Connections for everything this type asks the node, handed out per call. See `ClientPool`.
++    rpc: ClientPool,
+     /// An archival node to read pruned blocks from before falling back to the usual source.
+     ///
+     /// A fork's two chains share every block below the split, so a second full node on the same
+@@ -252,6 +323,15 @@ const RETRY_BUDGET_INDEXING: Duration = Duration::from_secs(300);
+ const RETRY_BUDGET_QUERY: Duration = Duration::from_secs(10);
+ const RPC_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+ 
++/// How many RPC connections to the node to keep.
++///
++/// Each one is a socket, and each is a slot for work that would otherwise queue behind whatever
++/// else is talking to the node. Four rather than more because every slot can become peer
++/// connections opened by the proxy in front of a pruned node, and a node has only so many peers
++/// worth asking: eight outbound full-relay peers is typical, and this is bounded well under that
++/// even with the proxy's own per-block concurrency on top.
++const RPC_POOL_SIZE: usize = 4;
++
+ impl Daemon {
+     pub(crate) fn connect(
+         config: &Config,
+@@ -352,7 +432,15 @@ impl Daemon {
+         )?);
+         Ok(Self {
+             p2p,
+-            rpc,
++            // The connection used for the checks above becomes the first of the pool, so a node
++            // that answered them is the node the pool talks to.
++            rpc: ClientPool::new(RPC_POOL_SIZE, {
++                let mut first = Some(rpc);
++                move || match first.take() {
++                    Some(client) => Ok(client),
++                    None => rpc_connect(config),
++                }
++            })?,
+             pruned,
+             helper,
+             helper_ceiling: AtomicUsize::new(usize::MAX),
+@@ -419,7 +507,7 @@ impl Daemon {
+     }
+ 
+     pub(crate) fn estimate_fee(&self, nblocks: u16) -> Result<Option<Amount>> {
+-        let res = self.rpc.estimate_smart_fee(nblocks, None);
++        let res = self.rpc.get().estimate_smart_fee(nblocks, None);
+         if let Err(bitcoincore_rpc::Error::JsonRpc(jsonrpc::Error::Rpc(RpcError {
+             code: -32603,
+             ..
+@@ -433,6 +521,7 @@ impl Daemon {
+     pub(crate) fn get_relay_fee(&self) -> Result<Amount> {
+         Ok(self
+             .rpc
++            .get()
+             .get_network_info()
+             .context("failed to get relay fee")?
+             .relay_fee)
+@@ -440,6 +529,7 @@ impl Daemon {
+ 
+     pub(crate) fn broadcast(&self, tx: &Transaction) -> Result<Txid> {
+         self.rpc
++            .get()
+             .send_raw_transaction(tx)
+             .context("failed to broadcast transaction")
+     }
+@@ -447,6 +537,7 @@ impl Daemon {
+     pub(crate) fn submitpackage(&self, txs: &[Transaction]) -> Result<Value> {
+         let package: Vec<String> = txs.iter().map(serialize_hex).collect();
+         self.rpc
++            .get()
+             .call("submitpackage", &[json!(package)])
+             .context("failed to submitpackage package")
+     }
+@@ -458,6 +549,7 @@ impl Daemon {
+     ) -> Result<Value> {
+         // No need to parse the resulting JSON, just return it as-is to the client.
+         self.rpc
++            .get()
+             .call(
+                 "getrawtransaction",
+                 &[json!(txid), json!(true), json!(blockhash)],
+@@ -485,6 +577,7 @@ impl Daemon {
+         blockhash: Option<BlockHash>,
+     ) -> Result<Transaction> {
+         self.rpc
++            .get()
+             .get_raw_transaction(txid, blockhash.as_ref())
+             .context("failed to get transaction")
+     }
+@@ -492,6 +585,7 @@ impl Daemon {
+     pub(crate) fn get_block_txids(&self, blockhash: BlockHash) -> Result<Vec<Txid>> {
+         Ok(self
+             .rpc
++            .get()
+             .call::<BlockTxids>("getblock", &[json!(blockhash), json!(1)])
+             .context("failed to get block txids")?
+             .tx)
+@@ -499,12 +593,14 @@ impl Daemon {
+ 
+     pub(crate) fn get_mempool_info(&self) -> Result<json::GetMempoolInfoResult> {
+         self.rpc
++            .get()
+             .get_mempool_info()
+             .context("failed to get mempool info")
+     }
+ 
+     pub(crate) fn get_mempool_txids(&self) -> Result<Vec<Txid>> {
+         self.rpc
++            .get()
+             .get_raw_mempool()
+             .context("failed to get mempool txids")
+     }
+@@ -513,7 +609,7 @@ impl Daemon {
+         &self,
+         txids: &[Txid],
+     ) -> Result<Vec<Option<json::GetMempoolEntryResult>>> {
+-        let results = batch_request(self.rpc.get_jsonrpc_client(), "getmempoolentry", txids)?;
++        let results = batch_request(self.rpc.get().get_jsonrpc_client(), "getmempoolentry", txids)?;
+         Ok(results
+             .into_iter()
+             .map(|r| match r?.result::<json::GetMempoolEntryResult>() {
+@@ -530,7 +626,7 @@ impl Daemon {
+         &self,
+         txids: &[Txid],
+     ) -> Result<Vec<Option<Transaction>>> {
+-        let results = batch_request(self.rpc.get_jsonrpc_client(), "getrawtransaction", txids)?;
++        let results = batch_request(self.rpc.get().get_jsonrpc_client(), "getrawtransaction", txids)?;
+         Ok(results
+             .into_iter()
+             .map(|r| -> Option<Transaction> {
+@@ -724,7 +820,7 @@ impl Daemon {
+     /// rather than cached: it advances as bitcoind prunes, and reading a stale
+     /// value low would route a since-pruned block to p2p and hang.
+     fn prune_height(&self) -> Result<usize> {
+-        let info = get_blockchain_info(&self.rpc).context("failed to get prune height")?;
++        let info = get_blockchain_info(&self.rpc.get()).context("failed to get prune height")?;
+         Ok(info.prune_height.unwrap_or(0) as usize)
+     }
+ 
+@@ -732,7 +828,7 @@ impl Daemon {
+     /// `getblockheader` — headers survive pruning, so this answers for every
+     /// block regardless of whether its data is still on disk.
+     fn block_heights(&self, blockhashes: &[BlockHash]) -> Result<Vec<usize>> {
+-        let results = batch_request(self.rpc.get_jsonrpc_client(), "getblockheader", blockhashes)?;
++        let results = batch_request(self.rpc.get().get_jsonrpc_client(), "getblockheader", blockhashes)?;
+         results
+             .into_iter()
+             .zip(blockhashes)
+@@ -750,7 +846,7 @@ impl Daemon {
+     /// `getblock <hash> 0` is the verbosity btc-rpc-proxy intercepts and will
+     /// satisfy from peers when bitcoind has pruned the block.
+     fn get_block_raw_rpc(&self, hash: BlockHash) -> Result<SerBlock> {
+-        get_block_raw_with(&self.rpc, hash)
++        get_block_raw_with(&self.rpc.get(), hash)
+     }
+ 
+     pub(crate) fn new_block_notification(&self) -> Receiver<()> {
+@@ -835,6 +931,68 @@ mod tests {
+         assert_eq!(info.prune_height, None);
+     }
+ 
++    /// The pool hands out each connection to one caller at a time and takes it back afterwards.
++    /// Without that, "four slots" would mean four names for the same socket.
++    #[test]
++    fn the_pool_hands_out_each_connection_once() {
++        let pool = super::Pool::new(3, {
++            let mut next = 0;
++            move || {
++                next += 1;
++                Ok(next)
++            }
++        })
++        .unwrap();
++
++        let a = pool.get();
++        let b = pool.get();
++        let c = pool.get();
++        let mut held = vec![*a, *b, *c];
++        held.sort();
++        assert_eq!(held, vec![1, 2, 3], "three distinct connections");
++
++        drop(b);
++        assert_eq!(*pool.get(), 2, "a returned connection is handed out again");
++    }
++
++    /// A connection is returned even when the call that borrowed it failed, because the transport
++    /// opens a fresh socket on its next request anyway. Losing one per error would drain the pool.
++    #[test]
++    fn a_connection_comes_back_after_an_error() {
++        let pool = super::Pool::new(1, || Ok(7u8)).unwrap();
++        {
++            let borrowed = pool.get();
++            let _: Result<(), ()> = Err(());
++            assert_eq!(*borrowed, 7);
++        }
++        assert_eq!(*pool.get(), 7, "still available after a failed borrow");
++    }
++
++    /// Asking for more than exist waits rather than opening another. The wait is the throttle:
++    /// every slot in use can become peer connections on the far side of the proxy.
++    #[test]
++    fn the_pool_blocks_when_every_connection_is_busy() {
++        use std::sync::Arc;
++        use std::time::Duration;
++
++        let pool = Arc::new(super::Pool::new(1, || Ok(1u8)).unwrap());
++        let held = pool.get();
++
++        let waiter = {
++            let pool = Arc::clone(&pool);
++            std::thread::spawn(move || {
++                let _got = pool.get();
++                true
++            })
++        };
++
++        std::thread::sleep(Duration::from_millis(50));
++        assert!(!waiter.is_finished(), "it should still be waiting");
++
++        drop(held);
++        assert!(waiter.join().unwrap(), "and proceed once one is free");
++    }
++
+     fn rpc_err(code: i32, message: &str) -> anyhow::Error {
+         use bitcoincore_rpc::jsonrpc;
+         let e = bitcoincore_rpc::Error::JsonRpc(jsonrpc::Error::Rpc(jsonrpc::error::RpcError {
+-- 
+2.43.0
+

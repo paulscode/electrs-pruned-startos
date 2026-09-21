@@ -1,0 +1,226 @@
+From 8168b21902c4a12467fd1049404ecbfbcacb1a3d Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Mon, 21 Sep 2026 09:16:46 -0500
+Subject: [PATCH 14/15] server: answer clients in parallel
+
+`handle_events` ran inline on the loop that also drives `rpc.sync()`, one client
+after another. On a pruned node a single request can reach for a block the node has
+discarded, which costs seconds rather than milliseconds, so one wallet with deep
+history stalled indexing and every other connected client behind it.
+
+Split the batch in three. Connects and disconnects mutate the peer map, so they stay
+serial, and the clients with work are taken out of the map so each task owns one
+outright. Answering runs across them in parallel, each task touching only its own
+`Peer` and a shared `&Rpc` -- the same split `notify_peers` has always relied on.
+Survivors go back in the map serially.
+
+Behaviour is unchanged per client: its requests are answered in one batch, in the
+order they arrived, a write error still disconnects it, and a disconnect still
+discards whatever was queued behind it. The folding that carries those two ordering
+rules is now `fold_messages`, which needs no live `Rpc` and so has tests.
+
+Also corrects the write-timeout rationale in `accept_loop`, which described writes
+happening on the server loop. They no longer do, and a wedged peer now holds a
+worker instead -- still worth bounding, for a different reason than before.
+---
+ src/server.rs | 155 ++++++++++++++++++++++++++++++++++++++++----------
+ 1 file changed, 124 insertions(+), 31 deletions(-)
+
+diff --git a/src/server.rs b/src/server.rs
+index 770dfbf..b14e1cf 100644
+--- a/src/server.rs
++++ b/src/server.rs
+@@ -180,30 +180,76 @@ enum Message {
+     Done,
+ }
+ 
++/// Answer a batch of client requests, one client at a time but several clients at once.
++///
++/// Answering a request can mean reading a block the node has pruned, which costs seconds rather
++/// than milliseconds. This runs on the same loop that drives `rpc.sync()`, so doing that one
++/// client after another lets a single wallet with deep history stall indexing and every other
++/// connected client behind it. Done a client at a time, the wait a client sees is its own.
++///
++/// Split in three, because only the middle part is safe to run in parallel:
++///   1. serial: apply connects and disconnects, which mutate the map itself, and take the
++///      clients with work out of it so each task owns one outright;
++///   2. parallel: answer each one, touching only its own `Peer` and a shared `&Rpc` -- the same
++///      split `notify_peers` above already relies on;
++///   3. serial: put back whoever survived.
++///
++/// Requests from one client stay in order and in one batch, which the protocol requires: a
++/// client matches responses to requests by position as much as by id.
+ fn handle_events(rpc: &Rpc, peers: &mut HashMap<usize, Peer>, events: Vec<Event>) {
+     let mut events_by_peer = HashMap::<usize, Vec<Message>>::new();
+     events
+         .into_iter()
+         .for_each(|e| events_by_peer.entry(e.peer_id).or_default().push(e.msg));
++
++    let mut working: Vec<(Peer, Vec<String>, bool)> = vec![];
+     for (peer_id, messages) in events_by_peer {
+-        handle_peer_events(rpc, peers, peer_id, messages);
++        let (opened, lines, done) = fold_messages(messages);
++        for stream in opened {
++            debug!("{}: connected", peer_id);
++            peers.insert(peer_id, Peer::new(peer_id, stream));
++        }
++        // Absent from the map means an unknown peer: nothing to answer, nothing to remove.
++        if let Some(peer) = peers.remove(&peer_id) {
++            working.push((peer, lines, done));
++        }
++    }
++
++    let survivors: Vec<Peer> = working
++        .into_par_iter()
++        .filter_map(|(mut peer, lines, done)| {
++            let responses = rpc.handle_requests(&mut peer.client, &lines);
++            match peer.send(responses) {
++                Err(e) => {
++                    error!("{}: disconnecting due to {}", peer.id, e);
++                    peer.disconnect();
++                    None
++                }
++                // Already disconnected at the other end; just do not put it back.
++                Ok(()) if done => None,
++                Ok(()) => Some(peer),
++            }
++        })
++        .collect();
++
++    for peer in survivors {
++        peers.insert(peer.id, peer);
+     }
+ }
+ 
+-fn handle_peer_events(
+-    rpc: &Rpc,
+-    peers: &mut HashMap<usize, Peer>,
+-    peer_id: usize,
+-    messages: Vec<Message>,
+-) {
++/// Fold one client's batch into the connections it opened, the requests to answer, and whether
++/// it hung up.
++///
++/// Split out of `handle_events` so the two ordering rules it carries can be tested without a
++/// live `Rpc`: requests keep the order they arrived in, and a disconnect discards whatever was
++/// queued behind it.
++fn fold_messages(messages: Vec<Message>) -> (Vec<TcpStream>, Vec<String>, bool) {
++    let mut opened = vec![];
+     let mut lines = vec![];
+     let mut done = false;
+     for msg in messages {
+         match msg {
+-            Message::New(stream) => {
+-                debug!("{}: connected", peer_id);
+-                peers.insert(peer_id, Peer::new(peer_id, stream));
+-            }
++            Message::New(stream) => opened.push(stream),
+             Message::Request(line) => lines.push(line),
+             Message::Done => {
+                 done = true;
+@@ -211,31 +257,20 @@ fn handle_peer_events(
+             }
+         }
+     }
+-    let result = match peers.get_mut(&peer_id) {
+-        Some(peer) => {
+-            let responses = rpc.handle_requests(&mut peer.client, &lines);
+-            peer.send(responses)
+-        }
+-        None => return, // unknown peer
+-    };
+-    if let Err(e) = result {
+-        error!("{}: disconnecting due to {}", peer_id, e);
+-        peers.remove(&peer_id).unwrap().disconnect();
+-    } else if done {
+-        peers.remove(&peer_id); // already disconnected, just remove from peers' map
+-    }
++    (opened, lines, done)
+ }
+ 
+ fn accept_loop(listener: TcpListener, server_tx: Sender<Event>) -> Result<()> {
+     for (peer_id, conn) in listener.incoming().enumerate() {
+         let stream = conn.context("failed to accept")?;
+-        // Responses are written from `handle_events`, which runs inline on the
+-        // single server loop alongside `rpc.sync()`. `Peer::send` uses a
+-        // blocking `write_all`, so a client that stops draining its receive
+-        // window — gone without a FIN, suspended, or behind a stalled proxy —
+-        // holds that loop for as long as the kernel keeps retrying, freezing
+-        // indexing and every other client with it. Bound the wait so the
+-        // existing error path can drop just the offending peer instead.
++        // `Peer::send` uses a blocking `write_all`, so a client that stops
++        // draining its receive window — gone without a FIN, suspended, or
++        // behind a stalled proxy — holds whatever thread is writing to it for
++        // as long as the kernel keeps retrying. `handle_events` now writes from
++        // a worker rather than the server loop, so that no longer freezes
++        // indexing outright, but the workers are a shared pool: enough wedged
++        // peers still starve everyone else. Bound the wait so the existing
++        // error path can drop just the offending peer instead.
+         //
+         // `try_clone` below dups the fd, and the option lives on the socket, so
+         // setting it here also covers the clone handed to `Peer`.
+@@ -277,3 +312,61 @@ fn recv_loop(peer_id: usize, stream: &TcpStream, server_tx: Sender<Event>) -> Re
+     server_tx.send(Event { peer_id, msg })?;
+     Ok(())
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::{fold_messages, Message};
++    use std::net::{TcpListener, TcpStream};
++
++    fn request(line: &str) -> Message {
++        Message::Request(line.to_owned())
++    }
++
++    /// A client matches responses to requests by position as much as by id, so the order a batch
++    /// arrived in is the order it has to be answered in.
++    #[test]
++    fn requests_keep_their_order() {
++        let (_, lines, done) = fold_messages(vec![request("a"), request("b"), request("c")]);
++        assert_eq!(lines, vec!["a", "b", "c"]);
++        assert!(!done);
++    }
++
++    /// Everything after a disconnect goes unanswered. The socket is already shutting down, so
++    /// answering would mean doing the work -- possibly a pruned block fetch costing seconds --
++    /// for a client that cannot receive it.
++    #[test]
++    fn a_disconnect_discards_what_is_queued_behind_it() {
++        let (_, lines, done) = fold_messages(vec![
++            request("answered"),
++            Message::Done,
++            request("dropped"),
++        ]);
++        assert_eq!(lines, vec!["answered"]);
++        assert!(done);
++    }
++
++    /// A batch can open a connection and use it, and the requests that follow are still kept.
++    #[test]
++    fn a_new_connection_is_picked_up_with_its_requests() {
++        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
++        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
++
++        let (opened, lines, done) = fold_messages(vec![Message::New(stream), request("version")]);
++        assert_eq!(opened.len(), 1);
++        assert_eq!(lines, vec!["version"]);
++        assert!(!done);
++    }
++
++    /// A client that connects and immediately hangs up is reported as done with nothing to
++    /// answer, rather than being left in the map.
++    #[test]
++    fn a_connection_that_hangs_up_at_once_is_done() {
++        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
++        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
++
++        let (opened, lines, done) = fold_messages(vec![Message::New(stream), Message::Done]);
++        assert_eq!(opened.len(), 1);
++        assert!(lines.is_empty());
++        assert!(done);
++    }
++}
+-- 
+2.43.0
+

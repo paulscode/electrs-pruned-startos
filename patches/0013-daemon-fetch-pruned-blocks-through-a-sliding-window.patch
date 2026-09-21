@@ -1,0 +1,400 @@
+From 332b6f8e0ac3c31284fb104c87bb2484222551f9 Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Mon, 21 Sep 2026 09:34:09 -0500
+Subject: [PATCH 13/15] daemon: fetch pruned blocks through a sliding window
+
+Every block on this path is one the local node has discarded, so each is a round
+trip to the archival helper or, failing that, a peer fetch through the proxy costing
+seconds rather than milliseconds. Fetched one after another, a wallet whose history
+reaches back past the prune height pays that per block.
+
+Fetch several at once, keeping a bounded window in flight and delivering in request
+order as each head completes.
+
+A window and not fixed batches, which is the whole of the design rather than a
+refinement. This was first written as chunks joined before the next chunk began, and
+that version had to be reverted for indexing slower than fetching serially: 571-601s
+per 2000-block batch against ~488s. At a barrier one slow fetch, or one retry backing
+off a whole second, leaves every other worker idle until the slowest item in the
+chunk lands, so the batch costs its worst member rather than its average. Topping the
+window up as each block is delivered keeps the workers fed instead.
+
+That earlier attempt also had no connection pool, so its concurrency was not real:
+`jsonrpc` holds one socket behind a mutex and serialised the fetches it thought it
+was running in parallel. It therefore paid the barrier and bought nothing. The
+preceding commit is what makes this worth doing at all.
+
+Delivery stays sequential and in request order because callers accumulate state
+through `func`, and the window bounds memory, which matters when blocks are megabytes
+and an indexing run is thousands of them.
+
+The window is `pipeline`, separated from the block fetching so it can be tested on
+its own: that delivery follows request order and stays inside the concurrency bound,
+that the first error in request order is the one returned with nothing past it
+delivered, and -- the one that matters -- that work continues past an item still
+outstanding. That last is written as a liveness check rather than a timing comparison
+so it cannot go flaky, and it fails against the batching implementation, which is the
+point of having it.
+---
+ src/daemon.rs | 284 ++++++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 262 insertions(+), 22 deletions(-)
+
+diff --git a/src/daemon.rs b/src/daemon.rs
+index 3c83a25..d6159c5 100644
+--- a/src/daemon.rs
++++ b/src/daemon.rs
+@@ -9,11 +9,13 @@ use parking_lot::Mutex;
+ use serde::{Deserialize, Serialize};
+ use serde_json::{json, value::RawValue, Value};
+ 
++use std::collections::VecDeque;
+ use std::fs::File;
+ use std::io::Read;
+ use std::net::SocketAddr;
+ use std::path::Path;
+ use std::sync::atomic::{AtomicUsize, Ordering};
++use std::sync::mpsc;
+ use std::time::{Duration, Instant};
+ 
+ use crate::{
+@@ -201,6 +203,62 @@ fn rpc_connect(config: &Config) -> Result<Client> {
+ }
+ 
+ 
++/// Run `fetch` over `items` with at most `concurrency` of them in flight, handing each result to
++/// `deliver` in the order the items were given.
++///
++/// Written as a window rather than as fixed batches, which is the difference between this and an
++/// earlier version that had to be reverted. Fetching `N`, waiting for all `N`, then starting the
++/// next `N` costs the slowest item in each batch rather than the average, because the other
++/// workers sit idle at the barrier. Here a worker is started the moment the window's head is
++/// delivered, so the workers stay fed however long any one item takes.
++///
++/// Delivery is sequential and in order because callers accumulate state through `deliver`. A slow
++/// item therefore delays delivery of everything behind it -- unavoidable when order is required --
++/// but it does not stop those fetches from having already run.
++///
++/// The first error in item order is returned, and the fetches already in flight are waited out
++/// rather than abandoned; there is no way to cancel a blocking RPC mid-call.
++fn pipeline<T, R, F, D>(items: &[T], concurrency: usize, fetch: F, mut deliver: D) -> Result<()>
++where
++    T: Sync,
++    R: Send,
++    F: Fn(usize, &T) -> Result<R> + Sync,
++    D: FnMut(&T, R) -> Result<()>,
++{
++    assert!(concurrency > 0, "a pipeline with no workers cannot progress");
++
++    std::thread::scope(|scope| -> Result<()> {
++        let mut window: VecDeque<mpsc::Receiver<Result<R>>> = VecDeque::with_capacity(concurrency);
++        let mut queued = 0usize;
++
++        for (i, item) in items.iter().enumerate() {
++            // Top the window back up before waiting on its head, so the wait is spent with the
++            // other workers running rather than idle.
++            while queued < items.len() && window.len() < concurrency {
++                let (tx, rx) = mpsc::sync_channel(1);
++                let at = queued;
++                let fetch = &fetch;
++                scope.spawn(move || {
++                    // Ignore a send error: it only means the receiver was dropped because an
++                    // earlier item already failed and the run is unwinding.
++                    let _ = tx.send(fetch(at, &items[at]));
++                });
++                window.push_back(rx);
++                queued += 1;
++            }
++
++            let value = window
++                .pop_front()
++                .expect("one fetch is queued for every item not yet delivered")
++                .recv()
++                .expect("a pipeline worker panicked")?;
++            deliver(item, value)?;
++            debug_assert!(queued > i);
++        }
++        Ok(())
++    })
++}
++
+ /// A handful of RPC connections, handed out one at a time.
+ ///
+ /// `jsonrpc`'s transport holds a single socket behind a mutex, so concurrent calls on one `Client`
+@@ -279,7 +337,7 @@ pub struct Daemon {
+     /// A fork's two chains share every block below the split, so a second full node on the same
+     /// machine already holds most of what this pruned node has discarded, and a local read beats
+     /// pulling the same block off the network. Absent unless configured and verified archival.
+-    helper: Option<Client>,
++    helper: Option<ClientPool>,
+     /// Heights at or above this are not offered to the helper.
+     ///
+     /// Learned rather than configured. The helper is on the *other* side of a chain split, so it
+@@ -332,6 +390,12 @@ const RPC_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+ /// even with the proxy's own per-block concurrency on top.
+ const RPC_POOL_SIZE: usize = 4;
+ 
++/// How many pruned blocks to have in flight at once.
++///
++/// Matched to the connection pool so a chunk never waits on itself, and it is the pool rather than
++/// this that bounds what reaches the node.
++const FETCH_CONCURRENCY: usize = RPC_POOL_SIZE;
++
+ impl Daemon {
+     pub(crate) fn connect(
+         config: &Config,
+@@ -411,7 +475,20 @@ impl Daemon {
+                     }
+                     Ok(h) => {
+                         info!("reading pruned blocks from the archival helper at {} (height {}) before falling back", addr, h.blocks);
+-                        Some(client)
++                        // Pooled for the same reason as the node's own connections: this is the
++                        // fast path for deep history, so one socket here would cap exactly the
++                        // case the concurrency below exists to serve.
++                        let mut first = Some(client);
++                        match ClientPool::new(RPC_POOL_SIZE, move || match first.take() {
++                            Some(client) => Ok(client),
++                            None => connect_helper(*addr, cookie, config),
++                        }) {
++                            Ok(pool) => Some(pool),
++                            Err(e) => {
++                                warn!("ignoring the pruned-block helper at {}: {:#}", addr, e);
++                                None
++                            }
++                        }
+                     }
+                     Err(e) => {
+                         warn!("ignoring the pruned-block helper at {}: {}", addr, e);
+@@ -724,26 +801,33 @@ impl Daemon {
+             if local {
+                 self.p2p.lock().for_blocks(run.iter().copied(), &mut func)?;
+             } else {
+-                for (offset, &hash) in run.iter().enumerate() {
+-                    // Try the archival helper first. It holds the shared history below the split and
+-                    // answers from local disk; anything it does not have falls through unchanged.
+-                    if let Some(block) = self.block_from_helper(hash, heights[start + offset]) {
++                // Several fetches in flight, delivered one at a time in request order.
++                //
++                // Every block here is one the local node has discarded, so each is a round trip
++                // to the helper or, failing that, a peer fetch through the proxy that costs
++                // seconds rather than milliseconds. One after another, a wallet whose history
++                // reaches back before the prune height pays that per block.
++                //
++                // A sliding window rather than fetching in fixed batches. That distinction is the
++                // whole of it, and it is not a refinement: this was first written as
++                // `chunks(FETCH_CONCURRENCY)` joined before the next chunk began, and had to be
++                // reverted because it indexed *slower* than fetching serially (571-601s per
++                // 2000-block batch against ~488s). At a barrier one slow fetch -- or one retry,
++                // which backs off a whole second -- leaves every other worker idle waiting for it,
++                // so the batch costs the slowest fetch in it rather than the average. Topping the
++                // window up as each block is delivered keeps the workers fed instead.
++                //
++                // The window also bounds memory, which matters: blocks are megabytes and an
++                // indexing run is thousands of them.
++                pipeline(
++                    run,
++                    FETCH_CONCURRENCY,
++                    |i, &hash| self.fetch_pruned_block(hash, heights[start + i], budget),
++                    |&hash, block| {
+                         func(hash, block);
+-                        continue;
+-                    }
+-                    let block = self
+-                        .retry_rpc(&format!("fetching pruned block {}", hash), budget, || {
+-                            self.get_block_raw_rpc(hash)
+-                        })
+-                        .with_context(|| {
+-                            format!(
+-                                "failed to fetch pruned block {} over RPC; an RPC provider that \
+-                                 serves pruned blocks (e.g. btc-rpc-proxy) is required",
+-                                hash
+-                            )
+-                        })?;
+-                    func(hash, block);
+-                }
++                        Ok(())
++                    },
++                )?;
+             }
+             start = end;
+         }
+@@ -760,13 +844,40 @@ impl Daemon {
+     /// never seen, so it cannot be served by mistake — but nothing else in the pipeline verifies
+     /// what a block source returns, and this is the one source that is a different node following a
+     /// different chain. Checking here costs one header parse and removes the whole question.
++    /// Fetch one block the local node no longer holds.
++    ///
++    /// The archival helper first: it holds the history shared with the chain this one forked from
++    /// and answers from local disk, which beats the network by an order of magnitude. Anything it
++    /// does not have falls through to the node's own RPC, which on a pruned node means the proxy
++    /// fetching it from peers.
++    fn fetch_pruned_block(
++        &self,
++        hash: BlockHash,
++        height: usize,
++        budget: Duration,
++    ) -> Result<SerBlock> {
++        if let Some(block) = self.block_from_helper(hash, height) {
++            return Ok(block);
++        }
++        self.retry_rpc(&format!("fetching pruned block {}", hash), budget, || {
++            self.get_block_raw_rpc(hash)
++        })
++        .with_context(|| {
++            format!(
++                "failed to fetch pruned block {} over RPC; an RPC provider that serves pruned \
++                 blocks (e.g. btc-rpc-proxy) is required",
++                hash
++            )
++        })
++    }
++
+     fn block_from_helper(&self, hash: BlockHash, height: usize) -> Option<SerBlock> {
+         let helper = self.helper.as_ref()?;
+         if height >= self.helper_ceiling.load(Ordering::Relaxed) {
+             return None;
+         }
+ 
+-        match get_block_raw_with(helper, hash) {
++        match get_block_raw_with(&helper.get(), hash) {
+             Ok(block) => match AnyHeader::parse(&block) {
+                 // The expected case: shared history, byte-identical on both chains.
+                 Ok(header) if header.block_hash() == hash => Some(block),
+@@ -931,6 +1042,135 @@ mod tests {
+         assert_eq!(info.prune_height, None);
+     }
+ 
++    /// Delivery follows the request order whatever order the fetches finish in, and no more
++    /// than `concurrency` run at once. Both matter: callers accumulate state through `deliver`,
++    /// and the bound is what keeps a run of thousands of megabyte blocks from being held at once.
++    #[test]
++    fn the_window_delivers_in_order_and_keeps_a_bounded_number_in_flight() {
++        use std::sync::atomic::{AtomicUsize, Ordering};
++        use std::time::Duration;
++
++        const CONCURRENCY: usize = 4;
++        let items: Vec<usize> = (0..32).collect();
++        let in_flight = AtomicUsize::new(0);
++        let high_water = AtomicUsize::new(0);
++        let mut delivered = vec![];
++
++        super::pipeline(
++            &items,
++            CONCURRENCY,
++            |_, &item| {
++                let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
++                high_water.fetch_max(now, Ordering::SeqCst);
++                // Long enough that genuinely concurrent workers overlap here.
++                std::thread::sleep(Duration::from_millis(5));
++                in_flight.fetch_sub(1, Ordering::SeqCst);
++                Ok(item)
++            },
++            |_, item| {
++                delivered.push(item);
++                Ok(())
++            },
++        )
++        .unwrap();
++
++        assert_eq!(delivered, items, "delivery follows request, not completion");
++        let peak = high_water.load(Ordering::SeqCst);
++        assert!(peak > 1, "nothing ever ran concurrently");
++        assert!(peak <= CONCURRENCY, "{} in flight, over the bound", peak);
++    }
++
++    /// The reason this is a window and not a batch, pinned.
++    ///
++    /// An earlier version fetched in fixed chunks and waited for the whole chunk before starting
++    /// the next, which had to be reverted for indexing slower than fetching serially: at the
++    /// barrier every other worker idles until the slowest item in the chunk is done. Here the
++    /// window refills as soon as its head is delivered, so work continues past items that are
++    /// still outstanding.
++    ///
++    /// Written as a liveness check rather than a timing comparison, so it cannot go flaky: items
++    /// 1..CONCURRENCY block until released, and the test waits for item CONCURRENCY to *start*.
++    /// A batching implementation would never start it, because its chunk has not finished.
++    #[test]
++    fn work_continues_past_an_item_that_is_still_outstanding() {
++        use std::sync::{Arc, Condvar, Mutex as StdMutex};
++        use std::time::{Duration, Instant};
++
++        const CONCURRENCY: usize = 4;
++
++        let gate = Arc::new((StdMutex::new(false), Condvar::new()));
++        let started = Arc::new(StdMutex::new(Vec::<usize>::new()));
++        let gate_worker = Arc::clone(&gate);
++        let started_worker = Arc::clone(&started);
++
++        // On its own thread: the call cannot return while the gate is shut.
++        let running = std::thread::spawn(move || {
++            let items: Vec<usize> = (0..8).collect();
++            super::pipeline(
++                &items,
++                CONCURRENCY,
++                |i, &item| {
++                    started_worker.lock().unwrap().push(i);
++                    if (1..CONCURRENCY).contains(&i) {
++                        let (lock, cv) = &*gate_worker;
++                        let mut open = lock.lock().unwrap();
++                        while !*open {
++                            open = cv.wait(open).unwrap();
++                        }
++                    }
++                    Ok(item)
++                },
++                |_, _| Ok(()),
++            )
++        });
++
++        // Item 0 returns at once, freeing one slot, so the window starts item CONCURRENCY while
++        // items 1..CONCURRENCY are still blocked.
++        let deadline = Instant::now() + Duration::from_secs(10);
++        while !started.lock().unwrap().contains(&CONCURRENCY) {
++            assert!(
++                Instant::now() < deadline,
++                "item {} never started while earlier ones were outstanding: \
++                 the window is not advancing",
++                CONCURRENCY
++            );
++            std::thread::sleep(Duration::from_millis(10));
++        }
++
++        let (lock, cv) = &*gate;
++        *lock.lock().unwrap() = true;
++        cv.notify_all();
++        running.join().unwrap().unwrap();
++    }
++
++    /// A later failure must not mask an earlier one, and nothing past a failure is delivered.
++    /// Fetches run out of order, so "the first error" has to mean first in request order.
++    #[test]
++    fn the_first_error_in_request_order_is_the_one_returned() {
++        let items: Vec<usize> = (0..8).collect();
++        let mut delivered = vec![];
++
++        let err = super::pipeline(
++            &items,
++            4,
++            |_, &item| {
++                if item == 2 || item == 5 {
++                    Err(anyhow::anyhow!("item {} failed", item))
++                } else {
++                    Ok(item)
++                }
++            },
++            |_, item| {
++                delivered.push(item);
++                Ok(())
++            },
++        )
++        .unwrap_err();
++
++        assert!(format!("{:#}", err).contains("item 2 failed"), "got: {:#}", err);
++        assert_eq!(delivered, vec![0, 1], "nothing past the failure is delivered");
++    }
++
+     /// The pool hands out each connection to one caller at a time and takes it back afterwards.
+     /// Without that, "four slots" would mean four names for the same socket.
+     #[test]
+-- 
+2.43.0
+

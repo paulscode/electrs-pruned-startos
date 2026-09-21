@@ -32,7 +32,7 @@ An archival node still works normally. Nothing changes for you if you are not pr
 This depends enormously on **when** you install it, and the difference is hours against days.
 
 - **Best case — install before or during Bitcoin's own sync.** Blocks are indexed as Bitcoin validates them, over its fast local connection, before pruning ever discards them. This costs little more than a normal Electrs index.
-- **Worst case — install onto a node that has been pruned for a long time.** Every block below the prune point has to be re-fetched one at a time from the Bitcoin network. Measured at roughly 160 ms per block over a normal internet connection, that is on the order of **a day or more** for the full chain, and considerably longer if your Bitcoin node is configured for Tor only.
+- **Worst case — install onto a node that has been pruned for a long time.** Every block below the prune point has to be re-fetched from the Bitcoin network. Measured at roughly 160 ms per block over a normal internet connection when fetched one at a time, that is on the order of **a day or more** for the full chain, and considerably longer if your Bitcoin node is configured for Tor only. Several blocks are now fetched at once, which helps, but not in proportion: the limit is how many peers are willing to serve you, not how many requests are made.
 
 Either way it happens once, and it survives restarts — if it is interrupted it resumes where it left off rather than starting over. But if you are setting up a new node and know you will want an Electrum server, install this one early.
 
@@ -46,15 +46,21 @@ does not offer this.
 To index a chain your node no longer stores, blocks are fetched from the Bitcoin peer-to-peer
 network. A peer that serves you a block learns that you wanted it. During the first index that tells
 a peer only that you are syncing, which is what any node reveals while it catches up. After the index
-is built, though, a few kinds of request can still reach for a block on demand — looking up the full
-details of an old transaction, or opening an old block in a block explorer — and those are triggered
-by something you asked for. A peer watching closely could learn which blocks interest you.
+is built, though, some requests still reach for a block on demand — restoring a wallet with old
+history, looking up the full details of an old transaction, or opening an old block in a block
+explorer — and those are triggered by something you asked for. A peer watching closely could learn
+which blocks interest you.
 
-Two things bound it:
+Three things bound it:
 
-- **Ordinary wallet use does not fetch anything.** Address balances, history and unspent outputs are
-  answered from the index this server builds. Your wallet's addresses are not sent to peers, and
-  querying them touches no peer at all.
+- **Your addresses are never sent to a peer.** What is asked for is a whole block, by its hash, and
+  the filtering happens here. A peer can see which blocks you wanted, never which addresses you were
+  looking for or that you were looking for an address at all.
+- **Day-to-day wallet use settles down to no fetching.** Once a wallet's addresses have been looked
+  up, their balances, history and unspent outputs are answered from the index and touch no peer. The
+  exception is the *first* look at an address with old activity — restoring a wallet, or adding a
+  new account — which reads the blocks its transactions are in, and below the prune point those come
+  from peers.
 - **If your Bitcoin node runs over Tor, so do these fetches.** They go out over the node's existing
   peer connections. That is slower, sometimes much slower, but the peer does not learn where the
   request came from.

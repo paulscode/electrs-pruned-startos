@@ -1,7 +1,7 @@
 From b7030266f9cf183146c836ae10d02e49167cd0d5 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Mon, 21 Sep 2026 02:25:25 -0500
-Subject: [PATCH 10/10] daemon: tolerate getblockheader and getblock without
+Subject: [PATCH 10/15] daemon: tolerate getblockheader and getblock without
  difficulty too
 
 The previous commit fixed getblockchaininfo, which is what stopped the indexer

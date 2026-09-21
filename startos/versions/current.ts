@@ -1,23 +1,31 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 const notes =
-  'Finishes the fix that 0.11.1:40 started. ' +
+  'Fixes wallet history failing to load when it reaches back past the point ' +
+  'Bitcoin pruned. ' +
   ' ' +
-  'Bitcoin Knots 29.4.2.knots20260508 stopped reporting a "difficulty" field ' +
-  'for blocks with the new header format. 0.11.1:40 fixed the call that ' +
-  'stopped the indexer starting, but two more calls read the same removed ' +
-  'field, so a started indexer then stalled on the first block it tried to ' +
-  'index, logging "resolving block heights failed ... missing field ' +
-  'difficulty" and retrying every thirty seconds. ' +
+  'Blocks older than the pruned window are not on disk, so they are fetched ' +
+  'from network peers, which takes seconds each rather than milliseconds. The ' +
+  'server gave up after ten seconds, which was less than a single fetch often ' +
+  'needed, so a wallet with older history was shown an error instead of its ' +
+  'transactions. Sparrow and Electrum both report this as a failure to fetch ' +
+  'history. ' +
   ' ' +
-  'Block heights and block transaction lists are now read without it, the same ' +
-  'way the first fix did. ' +
+  'The ten seconds could not simply be raised, because a waiting lookup used ' +
+  'to hold up indexing and every other connected wallet with it. Three changes ' +
+  'remove that: each wallet is now answered on its own worker rather than one ' +
+  'at a time, old blocks are fetched several at a time rather than one after ' +
+  'another, and the connection to Bitcoin is a small pool rather than a single ' +
+  'shared socket. With those in place the wait is raised to sixty seconds, ' +
+  'which is long enough for a peer fetch to finish. ' +
   ' ' +
-  'No reindex is needed and nothing was lost. An index stuck at this point ' +
-  'simply resumes from the block it stopped at.'
+  'Wallets with recent history only were never affected, and are unchanged. ' +
+  'Loading long histories over Tor is still slow, just no longer a failure. ' +
+  ' ' +
+  'No reindex is needed and nothing was lost.'
 
 export const current = VersionInfo.of({
-  version: '0.11.1:41',
+  version: '0.11.1:42',
   releaseNotes: {
     en_US: notes,
     es_ES: notes,
@@ -26,8 +34,8 @@ export const current = VersionInfo.of({
     fr_FR: notes,
   },
   migrations: {
-    // Nothing to migrate. The change is in how one RPC reply is parsed; the
-    // index on disk is untouched and was never reached by the failure.
+    // Nothing to migrate. Everything here is about how blocks are fetched and
+    // how clients are served; the index on disk is untouched.
     up: async ({ effects }) => {},
     down: IMPOSSIBLE,
   },

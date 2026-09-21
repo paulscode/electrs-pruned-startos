@@ -17,6 +17,12 @@ either. They are what lets this package index a chain whose blocks have 164-byte
 identity. Inert on a SHA256d chain: `AnyHeader::parse` reads the header's own version field, and on a
 chain that never sets bit 31 every path is the v1 one.
 
+`0008` through `0011` are the archival-block helper and the fixes to it, plus tolerating a node that
+no longer reports `difficulty`. `0012` through `0015` are throughput: they exist because a pruned
+node's block reads cost seconds rather than milliseconds, and the serving path was built for the
+latter. Read them together — `0015` raises a timeout that is only safe to raise because `0014`
+changed what waiting costs.
+
 **These files are generated, not edited.** They come from `git format-patch` over the commits in the
 `electrs-pruned` repo's `vendor/electrs`, which is the single source for this fork. Edit there, run the
 regtest harness there, regenerate, and copy the result here.
@@ -52,10 +58,12 @@ updates, and individual peer fetches fail transiently — a stale pooled peer co
 Any of that took indexing down, because the error propagates out of `Index::sync` and ends the
 process.
 
-Retries with exponential backoff. The budget differs by caller and that distinction is load-bearing:
-`handle_events` and `rpc.sync()` share one thread, so a query that waits freezes indexing and every
-other client. An intermediate version used one 300s budget everywhere and a single query against a
-downed proxy froze the whole server for five minutes. Indexing waits 300s, serving waits 10s.
+Retries with exponential backoff, on a budget that differs by caller. An intermediate version used
+one 300s budget everywhere, and a single query against a downed proxy froze the whole server for
+five minutes, because `handle_events` and `rpc.sync()` shared one thread. Indexing waits 300s.
+
+Serving waited 10s for the same reason, until `0014` gave each query its own worker and `0015`
+raised it to 60s — see those entries for why 10s had stopped being a trade-off and become a bug.
 
 **Retire when:** 0002 is upstreamed, since this is a fix to it rather than to upstream.
 
@@ -106,14 +114,142 @@ the other chain from this one.
 ## 0007 — bound client writes so a wedged peer cannot stall the server
 
 Inherited unchanged from `Start9-Community/electrs-startos`. Sets a 60s `SO_SNDTIMEO` on accepted
-client sockets, so a client that stops draining its receive window cannot hold the single `serve()`
-loop — which also runs `rpc.sync()` — for as long as the kernel keeps retransmitting.
+client sockets, so a client that stops draining its receive window cannot hold the thread writing
+to it for as long as the kernel keeps retransmitting.
+
+Originally that thread was the single `serve()` loop, which also runs `rpc.sync()`, so one wedged
+client froze everything. Since `0014` it is a worker instead — still worth bounding, because the
+workers are a shared pool and enough wedged peers still starve the rest.
 
 **Retire when:** upstream sets a write timeout (or makes the response write non-blocking) and the
 submodule is bumped past it. Tracked at
 [romanz/electrs#1326](https://github.com/romanz/electrs/issues/1326);
 [#745](https://github.com/romanz/electrs/issues/745) is the same defect reported in 2022. Neither
 `v0.11.1` nor `master` sets a timeout as of 2026-08.
+
+## 0008 — read pruned blocks from an archival node when one is available
+
+A fork's two chains share every block below the split, so a second full node on the same machine
+already holds most of what this pruned node has discarded. Reading one off local disk beats pulling
+it off the network by orders of magnitude. Optional: absent unless both `helper_rpc_addr` and
+`helper_cookie_file` are given, and refused unless that node verifies as archival.
+
+Deliberately cross-chain, which is the part that looks like a bug and is not. The helper is on the
+*other* side of the split, so it must be asked only for heights below it — and the split height is
+not configured but learned. The first hash the helper answers "Block not found" (`-5`) for marks
+where the chains diverged, and that becomes a ceiling no height at or above is offered to again.
+Every answer is checked by hash before it is used, so a wrong-chain block cannot be returned even
+before the ceiling settles.
+
+**Retire when:** never, on a forked chain. Inert without the config.
+
+## 0009, 0010 — tolerate a node that reports no `difficulty`
+
+Bitcoin Knots 29.4.2.knots20260508 (knots#420) stopped reporting `difficulty` for header-v2 blocks,
+on the grounds that a BLAKE2b difficulty and a SHA256d one are different units, and deleted the
+`getdifficulty` RPC. On a BLAKE2b chain every block above 961640 is header-v2, so the field is
+simply absent.
+
+electrs never reads it. It broke anyway: `bitcoincore-rpc-json` declares `difficulty` a required
+`f64` on `GetBlockchainInfoResult`, `GetBlockResult` and `GetBlockHeaderResult`, so serde failed the
+whole response. `0009` covers `getblockchaininfo`, which surfaced as a crash loop reporting "daemon
+not available"; `0010` covers `getblock` and `getblockheader`, which are on the indexing path and so
+stalled rather than crashed. Both replace the crate's struct with one naming only the fields this
+indexer actually uses, ignoring the rest.
+
+The lesson is in which search finds this: "what deserializes a Knots RPC response", not "what reads
+`difficulty`". Grepping this tree for the field name finds nothing, because the requirement is in a
+dependency. Parts 2 and 3 of the maturity fork land Oct 2026 and Aug 2027; re-run the deserializer
+sweep then.
+
+**Retire when:** `bitcoincore-rpc` makes these fields optional, or the submodule stops using it.
+
+## 0011 — make the helper ceiling monotone, and read the RPC code
+
+Two fixes to `0008`. The ceiling was set with `swap`, so a later, higher "not found" could raise it
+back above the split and reopen wrong-chain lookups; `fetch_min` makes it only ever descend. And
+"has this chain diverged here" was decided by matching the string "Block not found", which a
+reworded message upstream would silently turn into "never diverged" — now read from the RPC code
+(`-5`) in the error's source chain, with the string kept only as a fallback.
+
+`-5` is distinguished from `-1` ("Block not available (pruned data)") deliberately: the second means
+the node has the block and discarded the data, which is a different thing and must not move the
+ceiling.
+
+**Retire when:** with `0008`.
+
+## 0012 — hold a pool of RPC connections rather than one
+
+`jsonrpc`'s `SimpleHttpTransport` keeps a single socket behind a mutex, so every RPC through one
+`Client` serialises however many threads call it. On a pruned node each call can be a multi-second
+block fetch, so that mutex was the ceiling on everything else here. Four connections, handed out one
+at a time and returned on drop.
+
+Four rather than more because on a pruned node each slot becomes peer connections opened by the
+proxy, and a node has only so many peers worth asking.
+
+**Retire when:** `jsonrpc` gains a connection pool of its own.
+
+## 0013 — fetch pruned blocks through a sliding window
+
+Every block on this path is one the node has discarded, so each is a round trip to the helper or a
+peer fetch through the proxy measured in seconds. Fetched one after another, a wallet whose history
+reaches back past the prune height paid that per block. Now several are kept in flight, bounded by
+`0012`'s pool, and delivered in request order as each completes.
+
+**A window, not fixed batches, and that is the whole of it.** This was first written as chunks
+joined before the next chunk began, and that version was deployed and reverted for indexing *slower*
+than fetching serially: 571-601s per 2000-block batch against ~488s. At a barrier one slow fetch —
+or one retry, which backs off a whole second — leaves every other worker idle until the slowest item
+in the chunk lands, so a batch costs its worst member rather than its average. That attempt also
+predated `0012`, so its concurrency was not real: `jsonrpc` holds one socket behind a mutex and
+serialised the fetches it thought it was running in parallel. It paid the barrier and bought
+nothing. If this is ever rewritten, keep N in flight and deliver in order as they complete.
+
+Delivery is otherwise unchanged: one block at a time, in request order, and a failure still ends the
+run at the first error in that order. The window bounds memory, which matters when blocks are
+megabytes and an indexing run is thousands of them.
+
+The window is `pipeline`, separate from the block fetching so it can be tested alone. One of its
+tests is a liveness check that work continues past an item still outstanding; it fails against the
+batching implementation, which is why it is there.
+
+**Retire when:** upstream fetches concurrently.
+
+## 0014 — answer clients in parallel
+
+`handle_events` ran inline on the loop that also drives `rpc.sync()`, one client after another, so a
+single request that reached for a pruned block stalled indexing and every other connected client
+behind it. Split into three phases: connects and disconnects stay serial because they mutate the
+peer map, answering runs across clients in parallel, survivors go back in the map serially. That is
+the same split `notify_peers` upstream has always used.
+
+Per client nothing changes: its requests are answered in one batch, in arrival order, and a
+disconnect still discards whatever was queued behind it.
+
+This is also what makes `0007`'s write timeout matter for a different reason than it used to — a
+wedged peer now holds a worker rather than the server loop.
+
+**Retire when:** upstream stops serving clients from the sync loop.
+
+## 0015 — let a query retry a pruned block
+
+The serving budget from `0002` was 10s against a default `jsonrpc_timeout` of 15s, which made it a
+no-retry policy without looking like one: the deadline is only checked after an attempt returns, so
+the first attempt could never fail before the budget was already spent. Underneath that, electrs
+stopped waiting at 15s while the proxy keeps working on the block until its own `peer_timeout`, 30s
+by default — so the fetch being abandoned was often one the proxy went on to complete.
+
+Raised to 60s, which spans several attempts and reaches past the point the proxy gives up on its
+own. Safe only because of `0014`: a query that waits no longer freezes the server.
+
+A retry is also meant to be nearly free, because btc-rpc-proxy collapses concurrent requests for the
+same block and a retry therefore joins the fetch already in flight rather than starting a second
+one. **That part is not in a published proxy image yet** — it ships with the next one. Against an
+older proxy this patch is still correct and still fixes the reported failure; a retry just costs a
+duplicate fetch instead of joining one.
+
+**Retire when:** with `0002`.
 
 ## Verifying after a submodule bump
 

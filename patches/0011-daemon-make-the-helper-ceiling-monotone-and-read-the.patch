@@ -1,0 +1,173 @@
+From 95c9eb347c115c344338bf3f538261c3a1b64a7d Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Mon, 21 Sep 2026 08:13:03 -0500
+Subject: [PATCH 11/15] daemon: make the helper ceiling monotone and read the
+ RPC code
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two wrinkles in the archival helper's learned ceiling, neither of which can
+produce wrong data — the hash check in block_from_helper is what guarantees
+that — but both of which cost lookups that should not happen.
+
+The ceiling was stored with `swap`. The guard only stops a new call at or above
+it, and the window between reading it and recording a miss spans an RPC round
+trip, so two concurrent lookups either side of the divergence can finish out of
+order and the higher one puts the ceiling back up. `fetch_min` makes it monotone,
+which is what the comment already claimed it was.
+
+"Block not found" was matched as a substring of the formatted error. anyhow
+keeps the original in the source chain, so the RPC code is reachable and is now
+what decides: -5 from getblock means the hash is not on that chain at all, where
+-1 means the node has the block and pruned its data. Reading the message left a
+reworded error upstream silently turning divergence into "transient", which
+disables the ceiling and asks the helper for every block above the split
+forever.
+
+Also records why the pruned and height checks at connect time are load-bearing:
+they are what leaves divergence as the only reason for a miss, which is the
+assumption the ceiling rests on.
+---
+ src/daemon.rs | 103 ++++++++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 99 insertions(+), 4 deletions(-)
+
+diff --git a/src/daemon.rs b/src/daemon.rs
+index 0352a1b..2b8565d 100644
+--- a/src/daemon.rs
++++ b/src/daemon.rs
+@@ -142,9 +142,26 @@ fn get_block_raw_with(client: &Client, hash: BlockHash) -> Result<SerBlock> {
+ /// Is this the RPC error bitcoind gives for a block it has never heard of?
+ ///
+ /// Distinguished from every other failure because it is the only one that also means "and never
+-/// will be": it marks where the helper's chain and this one diverged. Matched on the message rather
+-/// than the code because the error arrives here already wrapped by `anyhow`.
++/// will be": it marks where the helper's chain and this one diverged. Everything else is assumed
++/// transient, so misreading one as this would disable the helper for the rest of the run.
++///
++/// Read from the RPC code rather than the message. `anyhow` keeps the original error in the source
++/// chain even though `.context()` wrapped it, so the structured error is still reachable and a
++/// reworded message upstream cannot silently turn this into "never diverged".
+ fn is_block_not_found(err: &anyhow::Error) -> bool {
++    if let Some(rpc_err) = err
++        .chain()
++        .filter_map(|cause| cause.downcast_ref::<bitcoincore_rpc::Error>())
++        .find_map(extract_bitcoind_error)
++    {
++        // RPC_INVALID_ADDRESS_OR_KEY. From `getblock` that is "Block not found", meaning the hash
++        // is not on this node's chain at all. A node that has the block but pruned its data answers
++        // -1 ("Block not available (pruned data)") instead, which is a different thing entirely and
++        // must not move the ceiling — though a pruned helper is refused before it can get here.
++        return rpc_err.code == -5;
++    }
++
++    // No structured error in the chain, so fall back to the message rather than assume transient.
+     format!("{:#}", err).contains("Block not found")
+ }
+ 
+@@ -293,6 +310,13 @@ impl Daemon {
+         //
+         // A helper that fails either test is dropped with a reason rather than retried: it is an
+         // optimisation, and running without it is the behaviour every other install has.
++        // These two checks are not only sanity filters: they are what makes the learned ceiling in
++        // `block_from_helper` safe. That ceiling only ever moves down, on the assumption that a
++        // helper which lacks one block lacks everything above it — true of a helper on a different
++        // chain, and false of one that is merely behind or pruned. Refusing both here means the
++        // only remaining reason for a miss is divergence, so the assumption holds. A helper on the
++        // *same* chain never misses at all, leaves the ceiling at `usize::MAX`, and serves every
++        // pruned block, which is the best case rather than a special one.
+         let helper = match (pruned, &config.helper) {
+             (false, _) | (_, None) => None,
+             (true, Some((addr, cookie))) => match connect_helper(*addr, cookie, config) {
+@@ -675,8 +699,14 @@ impl Daemon {
+                 // and must not fix the ceiling, or a moment's unavailability would disable the
+                 // helper for the whole index build.
+                 if is_block_not_found(&e) {
+-                    let prev = self.helper_ceiling.swap(height, Ordering::Relaxed);
+-                    if prev == usize::MAX {
++                    // `fetch_min`, not `swap`: the guard above only stops a *new* call at or above
++                    // the ceiling, and the window between reading it and recording a miss spans an
++                    // RPC round trip. Two concurrent lookups either side of the divergence can
++                    // therefore finish out of order, and an unconditional store would let the
++                    // higher one raise the ceiling back up. Taking the minimum makes it monotone,
++                    // which is what "one failure for the rest of the run" above claims it is.
++                    let prev = self.helper_ceiling.fetch_min(height, Ordering::Relaxed);
++                    if prev > height {
+                         info!(
+                             "the archival helper does not have block {} at height {}; using it only below that height from now on",
+                             hash, height
+@@ -805,6 +835,71 @@ mod tests {
+         assert_eq!(info.prune_height, None);
+     }
+ 
++    fn rpc_err(code: i32, message: &str) -> anyhow::Error {
++        use bitcoincore_rpc::jsonrpc;
++        let e = bitcoincore_rpc::Error::JsonRpc(jsonrpc::Error::Rpc(jsonrpc::error::RpcError {
++            code,
++            message: message.to_owned(),
++            data: None,
++        }));
++        // Wrapped exactly as `get_block_raw_with` wraps it, so the test exercises the real shape.
++        anyhow::Error::new(e).context("getblock failed")
++    }
++
++    /// -5 from `getblock` is the one failure that means "and never will be", so it is the only one
++    /// allowed to move the helper ceiling.
++    #[test]
++    fn block_not_found_is_read_from_the_rpc_code() {
++        assert!(super::is_block_not_found(&rpc_err(-5, "Block not found")));
++    }
++
++    /// A pruned node answers -1 for a block it knows but has discarded. Treating that as divergence
++    /// would disable the helper for the whole run over something transient.
++    #[test]
++    fn pruned_data_is_not_divergence() {
++        assert!(!super::is_block_not_found(&rpc_err(
++            -1,
++            "Block not available (pruned data)"
++        )));
++    }
++
++    /// The code is read in preference to the message, so a reworded -5 still counts and a message
++    /// that merely mentions the old wording under a different code does not.
++    #[test]
++    fn the_code_wins_over_the_message() {
++        assert!(super::is_block_not_found(&rpc_err(-5, "no such block")));
++        assert!(!super::is_block_not_found(&rpc_err(-28, "Block not found")));
++    }
++
++    /// With no structured error in the chain there is nothing to read a code from, so the message
++    /// is the only signal left.
++    #[test]
++    fn falls_back_to_the_message_when_unstructured() {
++        assert!(super::is_block_not_found(&anyhow::anyhow!(
++            "getblock failed: Block not found"
++        )));
++        assert!(!super::is_block_not_found(&anyhow::anyhow!(
++            "connection reset"
++        )));
++    }
++
++    /// The ceiling only ever moves down. `swap` did not guarantee that: two lookups either side of
++    /// the divergence can finish out of order, and the later, higher one would raise it back.
++    #[test]
++    fn the_helper_ceiling_only_moves_down() {
++        use std::sync::atomic::{AtomicUsize, Ordering};
++        let ceiling = AtomicUsize::new(usize::MAX);
++
++        // Out-of-order completion: the lower height records first.
++        assert_eq!(ceiling.fetch_min(962_000, Ordering::Relaxed), usize::MAX);
++        assert_eq!(ceiling.fetch_min(963_000, Ordering::Relaxed), 962_000);
++        assert_eq!(ceiling.load(Ordering::Relaxed), 962_000);
++
++        // And a genuinely tighter bound still lands.
++        ceiling.fetch_min(961_633, Ordering::Relaxed);
++        assert_eq!(ceiling.load(Ordering::Relaxed), 961_633);
++    }
++
+     /// knots#420 also drops `difficulty` from a verbose `getblockheader`. This one is worse
+     /// than the startup failure: it is on the indexing path, so it stalls a running indexer
+     /// in a retry loop rather than refusing to start.
+-- 
+2.43.0
+
