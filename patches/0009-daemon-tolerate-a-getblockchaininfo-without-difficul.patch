@@ -1,7 +1,7 @@
 From 37e058d008cc5e26d7410769f430ea173c945f28 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Mon, 21 Sep 2026 00:12:57 -0500
-Subject: [PATCH 9/9] daemon: tolerate a getblockchaininfo without difficulty
+Subject: [PATCH 09/10] daemon: tolerate a getblockchaininfo without difficulty
 
 bitcoincore-rpc's GetBlockchainInfoResult declares difficulty as a required
 f64. Bitcoin Knots 29.4.2.knots20260508 (knots#420) stopped reporting that

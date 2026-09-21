@@ -1,28 +1,23 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 const notes =
-  'Fixes the indexer refusing to start against a node running Bitcoin Knots ' +
-  '29.4.2.knots20260508. ' +
+  'Finishes the fix that 0.11.1:40 started. ' +
   ' ' +
-  'That release stopped reporting a "difficulty" field for blocks with the new ' +
-  'header format, because a BLAKE2b difficulty and a SHA256d one are different ' +
-  'units and cannot be compared. On this chain every block above the ' +
-  'activation has the new header, so the field is simply absent, and the ' +
-  'library this indexer reads the response with treated it as mandatory and ' +
-  'rejected the whole reply. ' +
+  'Bitcoin Knots 29.4.2.knots20260508 stopped reporting a "difficulty" field ' +
+  'for blocks with the new header format. 0.11.1:40 fixed the call that ' +
+  'stopped the indexer starting, but two more calls read the same removed ' +
+  'field, so a started indexer then stalled on the first block it tried to ' +
+  'index, logging "resolving block heights failed ... missing field ' +
+  'difficulty" and retrying every thirty seconds. ' +
   ' ' +
-  'The symptom was a crash loop: the indexer started, loaded its headers, then ' +
-  'exited reporting "daemon not available" with "missing field difficulty" ' +
-  'underneath, and the health check reported the daemon as crashed. Nothing ' +
-  'was wrong with the node, and nothing was wrong with the index. ' +
+  'Block heights and block transaction lists are now read without it, the same ' +
+  'way the first fix did. ' +
   ' ' +
-  'It now reads only the fields it actually uses, none of which is difficulty, ' +
-  'and ignores the rest. No reindex is needed and no data was lost: the ' +
-  'indexer never got as far as writing anything. If yours is in this state, ' +
-  'updating is all that is required.'
+  'No reindex is needed and nothing was lost. An index stuck at this point ' +
+  'simply resumes from the block it stopped at.'
 
 export const current = VersionInfo.of({
-  version: '0.11.1:40',
+  version: '0.11.1:41',
   releaseNotes: {
     en_US: notes,
     es_ES: notes,

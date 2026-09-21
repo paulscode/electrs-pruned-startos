@@ -1,0 +1,119 @@
+From b7030266f9cf183146c836ae10d02e49167cd0d5 Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Mon, 21 Sep 2026 02:25:25 -0500
+Subject: [PATCH 10/10] daemon: tolerate getblockheader and getblock without
+ difficulty too
+
+The previous commit fixed getblockchaininfo, which is what stopped the indexer
+starting. It did not fix the other two calls that go through a bitcoincore-rpc
+type declaring difficulty required, so a started indexer then stalled:
+
+  resolving block heights failed (failed to get header for <hash>:
+  missing field `difficulty`); retrying in 30s
+
+getblockheader is read for block heights and getblock verbosity 1 for block
+txids. Each reads exactly one field, height and tx, so each gets a struct
+naming only that. Verbosity 0 is untouched, being hex rather than JSON.
+
+Fixing only the call that appeared in the log was the error; the sweep should
+have been every typed response at once, since they all fail the same way on the
+same removed field.
+---
+ src/daemon.rs | 53 ++++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 50 insertions(+), 3 deletions(-)
+
+diff --git a/src/daemon.rs b/src/daemon.rs
+index e0218ae..0352a1b 100644
+--- a/src/daemon.rs
++++ b/src/daemon.rs
+@@ -55,6 +55,25 @@ fn get_blockchain_info(client: &Client) -> bitcoincore_rpc::Result<BlockchainInf
+     client.call::<BlockchainInfo>("getblockchaininfo", &[])
+ }
+ 
++/// The one field this indexer reads from a verbose `getblock`.
++///
++/// Same reason as [`BlockchainInfo`]: `bitcoincore-rpc`'s `GetBlockResult` declares
++/// `difficulty` required, and knots#420 stopped reporting it for header-v2 blocks.
++#[derive(Debug, Deserialize)]
++pub(crate) struct BlockTxids {
++    pub tx: Vec<Txid>,
++}
++
++/// The one field this indexer reads from a verbose `getblockheader`.
++///
++/// `GetBlockHeaderResult` declares `difficulty` required too, and `getblockheader` is on
++/// the indexing path rather than only startup, so this one stalls indexing rather than
++/// preventing a start.
++#[derive(Debug, Deserialize)]
++pub(crate) struct BlockHeaderHeight {
++    pub height: usize,
++}
++
+ enum PollResult {
+     Done(Result<()>),
+     Retry,
+@@ -449,7 +468,7 @@ impl Daemon {
+     pub(crate) fn get_block_txids(&self, blockhash: BlockHash) -> Result<Vec<Txid>> {
+         Ok(self
+             .rpc
+-            .get_block_info(&blockhash)
++            .call::<BlockTxids>("getblock", &[json!(blockhash), json!(1)])
+             .context("failed to get block txids")?
+             .tx)
+     }
+@@ -690,7 +709,7 @@ impl Daemon {
+             .map(|(r, hash)| {
+                 let header = r
+                     .ok_or_else(|| anyhow!("no getblockheader response for {}", hash))?
+-                    .result::<json::GetBlockHeaderResult>()
++                    .result::<BlockHeaderHeight>()
+                     .with_context(|| format!("failed to get header for {}", hash))?;
+                 Ok(header.height)
+             })
+@@ -749,7 +768,7 @@ where
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::BlockchainInfo;
++    use super::{BlockHeaderHeight, BlockTxids, BlockchainInfo};
+ 
+     /// A Knots node on a BLAKE2b chain omits `difficulty` entirely (knots#420). Deserializing
+     /// through `bitcoincore-rpc`'s own type fails here, which is what took indexers down when
+@@ -786,6 +805,34 @@ mod tests {
+         assert_eq!(info.prune_height, None);
+     }
+ 
++    /// knots#420 also drops `difficulty` from a verbose `getblockheader`. This one is worse
++    /// than the startup failure: it is on the indexing path, so it stalls a running indexer
++    /// in a retry loop rather than refusing to start.
++    #[test]
++    fn block_header_without_difficulty() {
++        let json = r#"{
++            "hash": "00000000000000012b0357b58437acbf0a560f060b5e37e92ceb332a68773c4e",
++            "confirmations": 1, "height": 973330, "version": -1610612736,
++            "versionHex": "a0000000", "merkleroot": "aa", "time": 1758430000,
++            "mediantime": 1758429000, "nonce": 1, "bits": "1d00ffff",
++            "difficulty_blake2b": 1234.5, "chainwork": "00", "nTx": 244
++        }"#;
++        let header: BlockHeaderHeight = serde_json::from_str(json).expect("must parse");
++        assert_eq!(header.height, 973330);
++    }
++
++    /// And from a verbose `getblock`, which is how block txids are read.
++    #[test]
++    fn block_txids_without_difficulty() {
++        let json = r#"{
++            "hash": "00000000000000012b0357b58437acbf0a560f060b5e37e92ceb332a68773c4e",
++            "height": 973330, "difficulty_blake2b": 1234.5,
++            "tx": ["0000000000000000000000000000000000000000000000000000000000000001"]
++        }"#;
++        let block: BlockTxids = serde_json::from_str(json).expect("must parse");
++        assert_eq!(block.tx.len(), 1);
++    }
++
+     /// An unpruned node omits `pruneheight`, and prune_height() maps that to zero.
+     #[test]
+     fn missing_prune_height_is_none() {
+-- 
+2.43.0
+

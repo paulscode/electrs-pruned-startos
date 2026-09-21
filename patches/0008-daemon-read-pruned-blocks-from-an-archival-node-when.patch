@@ -1,8 +1,8 @@
 From e9fc4bf162e17ef8bedfea422f4e1a3f83ec35d4 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Mon, 31 Aug 2026 12:18:16 -0500
-Subject: [PATCH 8/9] daemon: read pruned blocks from an archival node when one
- is available
+Subject: [PATCH 08/10] daemon: read pruned blocks from an archival node when
+ one is available
 
 A fork's two chains share every block below the split, so an operator
 running a pruned node of one chain and a full node of the other already
