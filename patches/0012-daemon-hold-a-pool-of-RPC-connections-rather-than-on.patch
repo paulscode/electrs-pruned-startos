@@ -1,6 +1,6 @@
-From c85f579a05efe792e3f4a4cd4288a22acf074cd3 Mon Sep 17 00:00:00 2001
+From ee43cd11182a278c952b831fecb66f41586b53eb Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
-Date: Mon, 21 Sep 2026 08:36:10 -0500
+Date: Mon, 21 Sep 2026 13:10:00 -0500
 Subject: [PATCH 12/15] daemon: hold a pool of RPC connections rather than one
 
 `jsonrpc`'s transport keeps a single socket behind a mutex, so every call on a
@@ -22,11 +22,11 @@ node that answered them is the node the pool talks to.
 This is groundwork: nothing yet issues concurrent calls. What it removes is the
 reason doing so would not have helped.
 ---
- src/daemon.rs | 174 +++++++++++++++++++++++++++++++++++++++++++++++---
- 1 file changed, 166 insertions(+), 8 deletions(-)
+ src/daemon.rs | 178 +++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 170 insertions(+), 8 deletions(-)
 
 diff --git a/src/daemon.rs b/src/daemon.rs
-index 2b8565d..3c83a25 100644
+index 2b8565d..f423da4 100644
 --- a/src/daemon.rs
 +++ b/src/daemon.rs
 @@ -200,9 +200,80 @@ fn rpc_connect(config: &Config) -> Result<Client> {
@@ -111,7 +111,7 @@ index 2b8565d..3c83a25 100644
      /// An archival node to read pruned blocks from before falling back to the usual source.
      ///
      /// A fork's two chains share every block below the split, so a second full node on the same
-@@ -252,6 +323,15 @@ const RETRY_BUDGET_INDEXING: Duration = Duration::from_secs(300);
+@@ -252,6 +323,19 @@ const RETRY_BUDGET_INDEXING: Duration = Duration::from_secs(300);
  const RETRY_BUDGET_QUERY: Duration = Duration::from_secs(10);
  const RPC_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
  
@@ -122,12 +122,16 @@ index 2b8565d..3c83a25 100644
 +/// connections opened by the proxy in front of a pruned node, and a node has only so many peers
 +/// worth asking: eight outbound full-relay peers is typical, and this is bounded well under that
 +/// even with the proxy's own per-block concurrency on top.
++///
++/// It is also the ceiling on concurrent RPCs reaching the node at all, which several clients being
++/// served at once (`server.rs`) would otherwise leave unbounded. Comfortable against bitcoind's
++/// own `rpcthreads`, which the packaged node defaults to 16 and will not let you set below 4.
 +const RPC_POOL_SIZE: usize = 4;
 +
  impl Daemon {
      pub(crate) fn connect(
          config: &Config,
-@@ -352,7 +432,15 @@ impl Daemon {
+@@ -352,7 +436,15 @@ impl Daemon {
          )?);
          Ok(Self {
              p2p,
@@ -144,7 +148,7 @@ index 2b8565d..3c83a25 100644
              pruned,
              helper,
              helper_ceiling: AtomicUsize::new(usize::MAX),
-@@ -419,7 +507,7 @@ impl Daemon {
+@@ -419,7 +511,7 @@ impl Daemon {
      }
  
      pub(crate) fn estimate_fee(&self, nblocks: u16) -> Result<Option<Amount>> {
@@ -153,7 +157,7 @@ index 2b8565d..3c83a25 100644
          if let Err(bitcoincore_rpc::Error::JsonRpc(jsonrpc::Error::Rpc(RpcError {
              code: -32603,
              ..
-@@ -433,6 +521,7 @@ impl Daemon {
+@@ -433,6 +525,7 @@ impl Daemon {
      pub(crate) fn get_relay_fee(&self) -> Result<Amount> {
          Ok(self
              .rpc
@@ -161,7 +165,7 @@ index 2b8565d..3c83a25 100644
              .get_network_info()
              .context("failed to get relay fee")?
              .relay_fee)
-@@ -440,6 +529,7 @@ impl Daemon {
+@@ -440,6 +533,7 @@ impl Daemon {
  
      pub(crate) fn broadcast(&self, tx: &Transaction) -> Result<Txid> {
          self.rpc
@@ -169,7 +173,7 @@ index 2b8565d..3c83a25 100644
              .send_raw_transaction(tx)
              .context("failed to broadcast transaction")
      }
-@@ -447,6 +537,7 @@ impl Daemon {
+@@ -447,6 +541,7 @@ impl Daemon {
      pub(crate) fn submitpackage(&self, txs: &[Transaction]) -> Result<Value> {
          let package: Vec<String> = txs.iter().map(serialize_hex).collect();
          self.rpc
@@ -177,7 +181,7 @@ index 2b8565d..3c83a25 100644
              .call("submitpackage", &[json!(package)])
              .context("failed to submitpackage package")
      }
-@@ -458,6 +549,7 @@ impl Daemon {
+@@ -458,6 +553,7 @@ impl Daemon {
      ) -> Result<Value> {
          // No need to parse the resulting JSON, just return it as-is to the client.
          self.rpc
@@ -185,7 +189,7 @@ index 2b8565d..3c83a25 100644
              .call(
                  "getrawtransaction",
                  &[json!(txid), json!(true), json!(blockhash)],
-@@ -485,6 +577,7 @@ impl Daemon {
+@@ -485,6 +581,7 @@ impl Daemon {
          blockhash: Option<BlockHash>,
      ) -> Result<Transaction> {
          self.rpc
@@ -193,7 +197,7 @@ index 2b8565d..3c83a25 100644
              .get_raw_transaction(txid, blockhash.as_ref())
              .context("failed to get transaction")
      }
-@@ -492,6 +585,7 @@ impl Daemon {
+@@ -492,6 +589,7 @@ impl Daemon {
      pub(crate) fn get_block_txids(&self, blockhash: BlockHash) -> Result<Vec<Txid>> {
          Ok(self
              .rpc
@@ -201,7 +205,7 @@ index 2b8565d..3c83a25 100644
              .call::<BlockTxids>("getblock", &[json!(blockhash), json!(1)])
              .context("failed to get block txids")?
              .tx)
-@@ -499,12 +593,14 @@ impl Daemon {
+@@ -499,12 +597,14 @@ impl Daemon {
  
      pub(crate) fn get_mempool_info(&self) -> Result<json::GetMempoolInfoResult> {
          self.rpc
@@ -216,7 +220,7 @@ index 2b8565d..3c83a25 100644
              .get_raw_mempool()
              .context("failed to get mempool txids")
      }
-@@ -513,7 +609,7 @@ impl Daemon {
+@@ -513,7 +613,7 @@ impl Daemon {
          &self,
          txids: &[Txid],
      ) -> Result<Vec<Option<json::GetMempoolEntryResult>>> {
@@ -225,7 +229,7 @@ index 2b8565d..3c83a25 100644
          Ok(results
              .into_iter()
              .map(|r| match r?.result::<json::GetMempoolEntryResult>() {
-@@ -530,7 +626,7 @@ impl Daemon {
+@@ -530,7 +630,7 @@ impl Daemon {
          &self,
          txids: &[Txid],
      ) -> Result<Vec<Option<Transaction>>> {
@@ -234,7 +238,7 @@ index 2b8565d..3c83a25 100644
          Ok(results
              .into_iter()
              .map(|r| -> Option<Transaction> {
-@@ -724,7 +820,7 @@ impl Daemon {
+@@ -724,7 +824,7 @@ impl Daemon {
      /// rather than cached: it advances as bitcoind prunes, and reading a stale
      /// value low would route a since-pruned block to p2p and hang.
      fn prune_height(&self) -> Result<usize> {
@@ -243,7 +247,7 @@ index 2b8565d..3c83a25 100644
          Ok(info.prune_height.unwrap_or(0) as usize)
      }
  
-@@ -732,7 +828,7 @@ impl Daemon {
+@@ -732,7 +832,7 @@ impl Daemon {
      /// `getblockheader` — headers survive pruning, so this answers for every
      /// block regardless of whether its data is still on disk.
      fn block_heights(&self, blockhashes: &[BlockHash]) -> Result<Vec<usize>> {
@@ -252,7 +256,7 @@ index 2b8565d..3c83a25 100644
          results
              .into_iter()
              .zip(blockhashes)
-@@ -750,7 +846,7 @@ impl Daemon {
+@@ -750,7 +850,7 @@ impl Daemon {
      /// `getblock <hash> 0` is the verbosity btc-rpc-proxy intercepts and will
      /// satisfy from peers when bitcoind has pruned the block.
      fn get_block_raw_rpc(&self, hash: BlockHash) -> Result<SerBlock> {
@@ -261,7 +265,7 @@ index 2b8565d..3c83a25 100644
      }
  
      pub(crate) fn new_block_notification(&self) -> Receiver<()> {
-@@ -835,6 +931,68 @@ mod tests {
+@@ -835,6 +935,68 @@ mod tests {
          assert_eq!(info.prune_height, None);
      }
  

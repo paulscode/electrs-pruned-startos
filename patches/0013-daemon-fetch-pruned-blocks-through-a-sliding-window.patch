@@ -1,6 +1,6 @@
-From 332b6f8e0ac3c31284fb104c87bb2484222551f9 Mon Sep 17 00:00:00 2001
+From 74e32e6e85c865f98a64fd72603194d4f85b7d72 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
-Date: Mon, 21 Sep 2026 09:34:09 -0500
+Date: Mon, 21 Sep 2026 13:10:00 -0500
 Subject: [PATCH 13/15] daemon: fetch pruned blocks through a sliding window
 
 Every block on this path is one the local node has discarded, so each is a round
@@ -36,11 +36,11 @@ outstanding. That last is written as a liveness check rather than a timing compa
 so it cannot go flaky, and it fails against the batching implementation, which is the
 point of having it.
 ---
- src/daemon.rs | 284 ++++++++++++++++++++++++++++++++++++++++++++++----
- 1 file changed, 262 insertions(+), 22 deletions(-)
+ src/daemon.rs | 290 ++++++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 268 insertions(+), 22 deletions(-)
 
 diff --git a/src/daemon.rs b/src/daemon.rs
-index 3c83a25..d6159c5 100644
+index f423da4..bd13fbf 100644
 --- a/src/daemon.rs
 +++ b/src/daemon.rs
 @@ -9,11 +9,13 @@ use parking_lot::Mutex;
@@ -57,7 +57,7 @@ index 3c83a25..d6159c5 100644
  use std::time::{Duration, Instant};
  
  use crate::{
-@@ -201,6 +203,62 @@ fn rpc_connect(config: &Config) -> Result<Client> {
+@@ -201,6 +203,68 @@ fn rpc_connect(config: &Config) -> Result<Client> {
  }
  
  
@@ -70,9 +70,15 @@ index 3c83a25..d6159c5 100644
 +/// workers sit idle at the barrier. Here a worker is started the moment the window's head is
 +/// delivered, so the workers stay fed however long any one item takes.
 +///
-+/// Delivery is sequential and in order because callers accumulate state through `deliver`. A slow
-+/// item therefore delays delivery of everything behind it -- unavoidable when order is required --
-+/// but it does not stop those fetches from having already run.
++/// Delivery is sequential, in order, and exactly once per item, because callers depend on all
++/// three. `Index::index_blocks` is the sharp case: it walks a separate iterator of heights, taking
++/// the next one per delivered block, so a reordering there would index blocks at each other's
++/// heights. Nothing would catch it -- its `expect` only fires on too many blocks and its `assert`
++/// only on too few -- and the result would be a silently wrong index. `Tracker::lookup_transaction`
++/// likewise keeps the first match for a BIP-30 duplicate txid, which is only meaningful in order.
++///
++/// A slow item therefore delays delivery of everything behind it, which is unavoidable when order
++/// is required, but it does not stop those fetches from having already run.
 +///
 +/// The first error in item order is returned, and the fetches already in flight are waited out
 +/// rather than abandoned; there is no way to cancel a blocking RPC mid-call.
@@ -120,7 +126,7 @@ index 3c83a25..d6159c5 100644
  /// A handful of RPC connections, handed out one at a time.
  ///
  /// `jsonrpc`'s transport holds a single socket behind a mutex, so concurrent calls on one `Client`
-@@ -279,7 +337,7 @@ pub struct Daemon {
+@@ -279,7 +343,7 @@ pub struct Daemon {
      /// A fork's two chains share every block below the split, so a second full node on the same
      /// machine already holds most of what this pruned node has discarded, and a local read beats
      /// pulling the same block off the network. Absent unless configured and verified archival.
@@ -129,8 +135,8 @@ index 3c83a25..d6159c5 100644
      /// Heights at or above this are not offered to the helper.
      ///
      /// Learned rather than configured. The helper is on the *other* side of a chain split, so it
-@@ -332,6 +390,12 @@ const RPC_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
- /// even with the proxy's own per-block concurrency on top.
+@@ -336,6 +400,12 @@ const RPC_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+ /// own `rpcthreads`, which the packaged node defaults to 16 and will not let you set below 4.
  const RPC_POOL_SIZE: usize = 4;
  
 +/// How many pruned blocks to have in flight at once.
@@ -142,7 +148,7 @@ index 3c83a25..d6159c5 100644
  impl Daemon {
      pub(crate) fn connect(
          config: &Config,
-@@ -411,7 +475,20 @@ impl Daemon {
+@@ -415,7 +485,20 @@ impl Daemon {
                      }
                      Ok(h) => {
                          info!("reading pruned blocks from the archival helper at {} (height {}) before falling back", addr, h.blocks);
@@ -164,7 +170,7 @@ index 3c83a25..d6159c5 100644
                      }
                      Err(e) => {
                          warn!("ignoring the pruned-block helper at {}: {}", addr, e);
-@@ -724,26 +801,33 @@ impl Daemon {
+@@ -728,26 +811,33 @@ impl Daemon {
              if local {
                  self.p2p.lock().for_blocks(run.iter().copied(), &mut func)?;
              } else {
@@ -217,7 +223,7 @@ index 3c83a25..d6159c5 100644
              }
              start = end;
          }
-@@ -760,13 +844,40 @@ impl Daemon {
+@@ -764,13 +854,40 @@ impl Daemon {
      /// never seen, so it cannot be served by mistake — but nothing else in the pipeline verifies
      /// what a block source returns, and this is the one source that is a different node following a
      /// different chain. Checking here costs one header parse and removes the whole question.
@@ -259,7 +265,7 @@ index 3c83a25..d6159c5 100644
              Ok(block) => match AnyHeader::parse(&block) {
                  // The expected case: shared history, byte-identical on both chains.
                  Ok(header) if header.block_hash() == hash => Some(block),
-@@ -931,6 +1042,135 @@ mod tests {
+@@ -935,6 +1052,135 @@ mod tests {
          assert_eq!(info.prune_height, None);
      }
  

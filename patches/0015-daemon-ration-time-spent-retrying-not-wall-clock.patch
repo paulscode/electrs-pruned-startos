@@ -1,0 +1,443 @@
+From f3009066b020d2d817654ae3d59772d42254903b Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Mon, 21 Sep 2026 13:10:00 -0500
+Subject: [PATCH 15/15] daemon: ration time spent retrying, not wall clock
+
+Three things wrong with the serving allowance, one fix.
+
+It was 10s against a default `jsonrpc_timeout` of 15s, and it was measured from the
+start of the call, so it was already gone by the time the opening attempt could fail.
+Every failure gave up without retrying. That is why a wallet with history below the
+prune height failed outright rather than waiting. Underneath it, electrs stopped
+waiting at 15s while the proxy keeps working on the block until its own
+`peer_timeout`, 30s by default, and caches what it fetches -- so the fetch being
+abandoned was often one the proxy went on to complete.
+
+Raised to 60s, which spans several attempts and keeps trying past that 30s, so a
+later attempt finds the block already cached. A proxy that also collapses concurrent
+requests for the same block turns that into a join rather than a second fetch: an
+improvement, not a requirement.
+
+Raising it alone would not have bounded what it claims to. A run is several RPCs --
+prune height, every height, then each block -- each retrying on its own fresh
+allowance, so a source that recovers just long enough to get past each stage could
+burn it over again at the next. Serving now shares one allowance across the run.
+
+But sharing it must not be done with a deadline, which is what I tried first and had
+to undo. A deadline from the start of the run charges time spent *succeeding*: a
+query that had been fetching happily for longer than the allowance hit its first
+transient error already past the deadline and gave up without a single retry. On a
+deep history over Tor, running longer than the allowance is ordinary, so that turned
+a stale peer connection into exactly the "failed to fetch history" this change exists
+to remove. A slow query is not a failing query.
+
+So what is rationed is time spent retrying, measured from the first failure and
+charged to the run as each call finishes. A run that is only succeeding has spent
+nothing, however long it has been going. Indexing keeps a fresh allowance per call,
+where it exists to ride out a restart rather than bound a wait, and where a
+2000-block Tor batch outlasts anything worth setting.
+
+Concurrent fetchers each charge their own retrying, so the total charged can exceed
+the allowance while several are in flight. Intended: they retry at the same time, so
+the wall clock they cost is still about one allowance.
+
+What waiting costs is in the comment rather than waved away. The preceding commit
+makes a batch cost its slowest client instead of the sum, but `handle_events` still
+runs inline on the loop that drives `rpc.sync()`, so raising this raises the
+worst-case indexing stall -- for a failing query. A succeeding one holds the loop for
+as long as it takes, and always has.
+---
+ src/daemon.rs | 290 ++++++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 271 insertions(+), 19 deletions(-)
+
+diff --git a/src/daemon.rs b/src/daemon.rs
+index bd13fbf..786d47d 100644
+--- a/src/daemon.rs
++++ b/src/daemon.rs
+@@ -14,7 +14,7 @@ use std::fs::File;
+ use std::io::Read;
+ use std::net::SocketAddr;
+ use std::path::Path;
+-use std::sync::atomic::{AtomicUsize, Ordering};
++use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+ use std::sync::mpsc;
+ use std::time::{Duration, Instant};
+ 
+@@ -374,19 +374,110 @@ pub struct Daemon {
+ // retries any of that takes indexing down, because the error propagates out of
+ // `Index::sync` and ends the process.
+ //
+-// The two budgets differ because the caller's tolerance does.
++// The two budgets differ because the caller's tolerance does, and so does the way each is spent
++// across the several RPCs one run of blocks needs — see [`Retry`].
+ 
+ /// Indexing can afford to wait: stalling is strictly better than dying, because
+ /// dying ends the process. Sized to ride out a dependency restart without also
+ /// riding out a real misconfiguration — past this, failing loudly is more useful
+ /// than stalling silently, and the index on disk is still valid to resume from.
+ const RETRY_BUDGET_INDEXING: Duration = Duration::from_secs(300);
+-/// Serving a client cannot. `handle_events` and `rpc.sync()` share one thread
+-/// (`server.rs`), so a query that waits also freezes indexing and every other
+-/// client. A prompt error the wallet can retry beats a five-minute freeze.
+-const RETRY_BUDGET_QUERY: Duration = Duration::from_secs(10);
++/// Serving a client can afford to wait, but less.
++///
++/// This used to be 10s, and 10s was below `jsonrpc_timeout` (15s by default). The allowance was
++/// measured from the start of the call, so it was already gone by the time the opening attempt
++/// could fail, and every failure gave up without retrying. That is what made a wallet with
++/// history below the prune height fail outright rather than wait. It is now measured from the
++/// first failure, so it means what its name says: how long to keep *retrying*.
++///
++/// **What waiting still costs.** `handle_events` runs inline on the `server.rs` loop that also
++/// drives `rpc.sync()`. Answering the clients within one batch is parallel, so a batch costs its
++/// slowest client rather than the sum of them, but the loop is still held for that long: a slow
++/// query stalls indexing, and a request arriving mid-batch waits for the batch to end. Raising
++/// this from 10s to 60s therefore raises the worst-case stall with it. Taking the work off that
++/// loop entirely is the fix, and it is not done here. Note that this bounds only a *failing*
++/// query: one that is succeeding holds the loop for as long as it takes, and always has.
++///
++/// That trade is deliberate. The stall is bounded, costs nothing permanent -- indexing resumes
++/// from where it was -- and only happens when fetches are actually failing, whereas the 10s
++/// bought a wallet that could not load its history at all.
++///
++/// Sized against what is on the other end. A single attempt is capped by `jsonrpc_timeout`, but
++/// the proxy in front of a pruned node keeps working on the block for its own `peer_timeout` (30s
++/// by default) after we have stopped waiting, and it caches what it fetches. So the budget is set
++/// to span several attempts and reach past that 30s: a later attempt picks up the block the
++/// earlier one gave up on. A proxy that also collapses concurrent requests for the same block
++/// makes that a join rather than a second fetch, which is a further improvement and not a
++/// requirement.
++///
++/// Shared across the whole run rather than granted per call -- see [`Retry`] for why, and for why
++/// only time spent retrying is counted against it.
++const RETRY_BUDGET_QUERY: Duration = Duration::from_secs(60);
+ const RPC_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+ 
++/// How the retry allowance is spent across the several RPCs one run of blocks needs.
++///
++/// A run is not one call. It reads the prune height, resolves every block's height, and then
++/// fetches each block, and each of those retries on its own.
++///
++/// What is counted is **time spent retrying**, never wall clock. That distinction is the whole
++/// point and it is easy to get wrong: an earlier version of this gave serving a single deadline
++/// from the start of the run, which quietly meant a query that had been *succeeding* for longer
++/// than the allowance gave up on its first transient error without retrying at all. On a deep
++/// history over Tor, succeeding for longer than the allowance is the normal case, so that turned
++/// a stale peer connection into exactly the "failed to fetch history" this release exists to fix.
++/// A slow query is not a failing query, and only a failing one should be cut short.
++#[derive(Clone, Copy)]
++enum Retry<'a> {
++    /// One allowance for the whole run.
++    ///
++    /// For serving, where the run holds the `server.rs` loop and a failing one must give up once
++    /// rather than once per stage. Without sharing, a source that is entirely down -- on a pruned
++    /// node one process answers all three kinds of call -- could burn the allowance again at each
++    /// stage that recovers just long enough to get past it.
++    ///
++    /// Workers fetching concurrently each charge their own retrying, so the total charged can
++    /// exceed the allowance while several are in flight. That is intended: they are retrying at
++    /// the same time, so the wall clock they cost is still about one allowance.
++    Shared {
++        spent_nanos: &'a AtomicU64,
++        budget: Duration,
++    },
++    /// A fresh allowance for each call.
++    ///
++    /// For indexing, where it exists to ride out a restart of the block source rather than to
++    /// bound a wait. A 2000-block batch over Tor outlasts any sane allowance, and the last blocks
++    /// in a batch must be as able to survive a blip as the first.
++    PerCall { budget: Duration },
++}
++
++impl Retry<'_> {
++    /// Would `extra` more spent retrying the call in hand exhaust the allowance?
++    fn exhausted(&self, extra: Duration) -> bool {
++        match self {
++            Retry::Shared {
++                spent_nanos,
++                budget,
++            } => Duration::from_nanos(spent_nanos.load(Ordering::Relaxed)) + extra >= *budget,
++            Retry::PerCall { budget } => extra >= *budget,
++        }
++    }
++
++    /// Record retrying that has finished, so the rest of the run sees it.
++    fn charge(&self, spent: Duration) {
++        if let Retry::Shared { spent_nanos, .. } = self {
++            spent_nanos.fetch_add(spent.as_nanos() as u64, Ordering::Relaxed);
++        }
++    }
++}
++
++/// Which allowance a run of blocks gets, before the run has somewhere to keep its tally.
++#[derive(Clone, Copy)]
++enum RetryPolicy {
++    Run(Duration),
++    PerCall(Duration),
++}
++
+ /// How many RPC connections to the node to keep.
+ ///
+ /// Each one is a socket, and each is a slot for work that would otherwise queue behind whatever
+@@ -543,27 +634,33 @@ impl Daemon {
+     fn retry_rpc<T>(
+         &self,
+         what: &str,
+-        budget: Duration,
++        retry: Retry<'_>,
+         mut f: impl FnMut() -> Result<T>,
+     ) -> Result<T> {
+-        let deadline = Instant::now() + budget;
++        // Started at the first failure, not at the first attempt: what is being rationed is time
++        // spent retrying. A call that simply takes a long time and then works has cost nothing.
++        let mut retrying_since: Option<Instant> = None;
+         let mut delay = Duration::from_secs(1);
+         let mut attempt = 0usize;
+         loop {
+             match f() {
+                 Ok(value) => {
+-                    if attempt > 0 {
++                    if let Some(since) = retrying_since {
++                        retry.charge(since.elapsed());
+                         info!("{} succeeded after {} retries", what, attempt);
+                     }
+                     return Ok(value);
+                 }
+                 Err(err) => {
+-                    if Instant::now() >= deadline {
++                    let since = *retrying_since.get_or_insert_with(Instant::now);
++                    let spent = since.elapsed();
++                    if retry.exhausted(spent) {
++                        retry.charge(spent);
+                         return Err(err).with_context(|| {
+                             format!(
+                                 "{} still failing after {}s of retries",
+                                 what,
+-                                budget.as_secs()
++                                spent.as_secs()
+                             )
+                         });
+                     }
+@@ -753,7 +850,11 @@ impl Daemon {
+         B: IntoIterator<Item = BlockHash>,
+         F: FnMut(BlockHash, SerBlock),
+     {
+-        self.for_blocks_with(blockhashes, func, RETRY_BUDGET_QUERY)
++        self.for_blocks_with(
++            blockhashes,
++            func,
++            RetryPolicy::Run(RETRY_BUDGET_QUERY),
++        )
+     }
+ 
+     /// Blocks for building the index. Retries patiently — see
+@@ -763,10 +864,14 @@ impl Daemon {
+         B: IntoIterator<Item = BlockHash>,
+         F: FnMut(BlockHash, SerBlock),
+     {
+-        self.for_blocks_with(blockhashes, func, RETRY_BUDGET_INDEXING)
++        self.for_blocks_with(
++            blockhashes,
++            func,
++            RetryPolicy::PerCall(RETRY_BUDGET_INDEXING),
++        )
+     }
+ 
+-    fn for_blocks_with<B, F>(&self, blockhashes: B, mut func: F, budget: Duration) -> Result<()>
++    fn for_blocks_with<B, F>(&self, blockhashes: B, mut func: F, policy: RetryPolicy) -> Result<()>
+     where
+         B: IntoIterator<Item = BlockHash>,
+         F: FnMut(BlockHash, SerBlock),
+@@ -790,9 +895,19 @@ impl Daemon {
+         if blockhashes.is_empty() {
+             return Ok(());
+         }
++        // One tally for the run, so the stages below cannot each spend the allowance over again.
++        let spent_nanos = AtomicU64::new(0);
++        let retry = match policy {
++            RetryPolicy::Run(budget) => Retry::Shared {
++                spent_nanos: &spent_nanos,
++                budget,
++            },
++            RetryPolicy::PerCall(budget) => Retry::PerCall { budget },
++        };
++
+         let prune_height =
+-            self.retry_rpc("reading prune height", budget, || self.prune_height())?;
+-        let heights = self.retry_rpc("resolving block heights", budget, || {
++            self.retry_rpc("reading prune height", retry, || self.prune_height())?;
++        let heights = self.retry_rpc("resolving block heights", retry, || {
+             self.block_heights(&blockhashes)
+         })?;
+ 
+@@ -832,7 +947,7 @@ impl Daemon {
+                 pipeline(
+                     run,
+                     FETCH_CONCURRENCY,
+-                    |i, &hash| self.fetch_pruned_block(hash, heights[start + i], budget),
++                    |i, &hash| self.fetch_pruned_block(hash, heights[start + i], retry),
+                     |&hash, block| {
+                         func(hash, block);
+                         Ok(())
+@@ -864,12 +979,12 @@ impl Daemon {
+         &self,
+         hash: BlockHash,
+         height: usize,
+-        budget: Duration,
++        retry: Retry<'_>,
+     ) -> Result<SerBlock> {
+         if let Some(block) = self.block_from_helper(hash, height) {
+             return Ok(block);
+         }
+-        self.retry_rpc(&format!("fetching pruned block {}", hash), budget, || {
++        self.retry_rpc(&format!("fetching pruned block {}", hash), retry, || {
+             self.get_block_raw_rpc(hash)
+         })
+         .with_context(|| {
+@@ -1052,6 +1167,143 @@ mod tests {
+         assert_eq!(info.prune_height, None);
+     }
+ 
++    /// Time spent *succeeding* must not consume the allowance.
++    ///
++    /// This is the regression that made the first attempt at a shared allowance wrong. It gave
++    /// serving one deadline from the start of the run, so a query that had been fetching happily
++    /// for longer than the allowance hit its first transient error already past that deadline and
++    /// gave up without a single retry. On a deep history over Tor, running longer than the
++    /// allowance is ordinary, so it turned a stale peer connection into the very "failed to fetch
++    /// history" this change exists to remove.
++    #[test]
++    fn a_long_run_that_is_working_keeps_its_full_allowance() {
++        use std::sync::atomic::AtomicU64;
++        use std::time::Duration;
++
++        let spent_nanos = AtomicU64::new(0);
++        let retry = super::Retry::Shared {
++            spent_nanos: &spent_nanos,
++            budget: Duration::from_secs(60),
++        };
++
++        // However long the run has been going, nothing has been retried yet.
++        assert!(
++            !retry.exhausted(Duration::ZERO),
++            "a run that has only succeeded has spent nothing"
++        );
++        assert!(
++            !retry.exhausted(Duration::from_secs(59)),
++            "so it still has essentially the whole allowance to retry with"
++        );
++    }
++
++    /// Retrying is charged, and the charge carries to the rest of the run. Without that each stage
++    /// -- prune height, heights, then every block -- could spend the allowance over again, which
++    /// is the whole reason it is shared.
++    #[test]
++    fn retrying_is_charged_across_the_run() {
++        use std::sync::atomic::AtomicU64;
++        use std::time::Duration;
++
++        let spent_nanos = AtomicU64::new(0);
++        let retry = super::Retry::Shared {
++            spent_nanos: &spent_nanos,
++            budget: Duration::from_secs(60),
++        };
++
++        retry.charge(Duration::from_secs(45));
++        assert!(
++            !retry.exhausted(Duration::from_secs(10)),
++            "45 spent plus 10 more is still inside 60"
++        );
++        assert!(
++            retry.exhausted(Duration::from_secs(15)),
++            "45 spent plus 15 more is not"
++        );
++
++        retry.charge(Duration::from_secs(15));
++        assert!(
++            retry.exhausted(Duration::ZERO),
++            "once it is gone a later stage gives up at once rather than starting over"
++        );
++    }
++
++    /// Indexing keeps a fresh allowance per call, and charging one call must not shorten the next.
++    /// A 2000-block batch over Tor outlasts any sane allowance, so the last blocks in a batch have
++    /// to be as able to ride out a blip as the first.
++    #[test]
++    fn indexing_does_not_carry_a_charge_between_calls() {
++        use std::time::Duration;
++
++        let retry = super::Retry::PerCall {
++            budget: Duration::from_secs(300),
++        };
++
++        retry.charge(Duration::from_secs(299));
++        assert!(
++            !retry.exhausted(Duration::from_secs(299)),
++            "each call starts its allowance afresh"
++        );
++        assert!(
++            retry.exhausted(Duration::from_secs(300)),
++            "but one call still cannot exceed it"
++        );
++    }
++
++    /// The allowance has to be worth more than one attempt, and it has to keep trying past the
++    /// point the proxy gives up on its own.
++    ///
++    /// If it is worth less than an attempt it is a no-retry policy wearing a retry's clothes,
++    /// which is what 10s against a 15s call timeout was. And the reason to keep going past 30s is
++    /// that the proxy works on the block for its own `peer_timeout` after we have stopped waiting
++    /// and caches the result, so an attempt starting after that point finds it already there.
++    #[test]
++    fn the_query_allowance_outlasts_a_stalled_fetch() {
++        use std::time::Duration;
++
++        // Both defaults live outside this file: `jsonrpc_timeout_secs` is 15 in
++        // internal/config_specification.toml, and btc-rpc-proxy's `peer_timeout` is 30 in its
++        // config_spec.toml. Named here so putting the allowance back under either fails loudly.
++        const ATTEMPT: Duration = Duration::from_secs(15);
++        const PROXY_PEER_TIMEOUT: Duration = Duration::from_secs(30);
++
++        let budget = super::RETRY_BUDGET_QUERY;
++        assert!(budget > ATTEMPT, "an allowance under one attempt never retries");
++
++        // Walk what `retry_rpc` actually does against a call that keeps failing: the allowance is
++        // measured from the *first failure*, so the opening attempt is not charged to it.
++        let retry = super::Retry::PerCall { budget };
++        let mut since_first_failure = Duration::ZERO;
++        let mut from_call_start = ATTEMPT; // the opening attempt
++        let mut delay = Duration::from_secs(1);
++        let mut attempt_starts = vec![Duration::ZERO];
++
++        loop {
++            if retry.exhausted(since_first_failure) {
++                break;
++            }
++            // Back off, then attempt again.
++            since_first_failure += delay;
++            from_call_start += delay;
++            attempt_starts.push(from_call_start);
++            since_first_failure += ATTEMPT;
++            from_call_start += ATTEMPT;
++            delay = std::cmp::min(delay * 2, super::RPC_RETRY_MAX_DELAY);
++        }
++
++        assert!(
++            attempt_starts.len() >= 2,
++            "only {} attempt(s) fit the allowance",
++            attempt_starts.len()
++        );
++        assert!(
++            attempt_starts.iter().any(|t| *t > PROXY_PEER_TIMEOUT),
++            "every attempt started within {:?}, so none can pick up what the proxy finished: {:?}",
++            PROXY_PEER_TIMEOUT,
++            attempt_starts
++        );
++    }
++
+     /// Delivery follows the request order whatever order the fetches finish in, and no more
+     /// than `concurrency` run at once. Both matter: callers accumulate state through `deliver`,
+     /// and the bound is what keeps a run of thousands of megabyte blocks from being held at once.
+-- 
+2.43.0
+

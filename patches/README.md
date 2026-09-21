@@ -243,32 +243,41 @@ it either way.
 
 **Retire when:** upstream stops serving clients from the sync loop.
 
-## 0015 — make the serving retry budget a real bound
+## 0015 — ration time spent retrying, not wall clock
 
-The serving budget from `0002` was 10s against a default `jsonrpc_timeout` of 15s, which made it a
-no-retry policy without looking like one: the deadline is only checked after an attempt returns, so
-the first attempt could never fail before the budget was already spent. Underneath that, electrs
-stopped waiting at 15s while the proxy keeps working on the block until its own `peer_timeout`, 30s
-by default — so the fetch being abandoned was often one the proxy went on to complete.
+The serving allowance from `0002` was 10s against a default `jsonrpc_timeout` of 15s, and it was
+measured from the start of the call — so it was already spent by the time the opening attempt could
+fail, and every failure gave up without retrying. A no-retry policy that did not look like one.
+Underneath that, electrs stopped waiting at 15s while the proxy keeps working on the block until its
+own `peer_timeout`, 30s by default, and caches the result — so the fetch being abandoned was often
+one the proxy went on to complete.
 
-Raised to 60s, which spans several attempts and reaches past the point the proxy gives up on its
-own.
+Raised to 60s, which spans several attempts and keeps trying past that 30s, so a later attempt finds
+the block already cached.
 
-A budget raised that way would not have bounded what it claims to, so how it is spent is now
-explicit. One run of blocks is several RPCs — read the prune height, resolve every height, fetch
-each block — each retried on its own fresh budget. Against a source that is entirely down, and on a
-pruned node one process answers all three, 60s became three 60s waits in series: most of the way
-back to the five-minute freeze the two budgets were split up to prevent, and a regression on the 10s
-rather than a fix. Serving now takes **one deadline for the whole run** and gives up once rather
-than once per stage. Indexing keeps a fresh budget per call, because there the allowance is for
-riding out a restart of the block source, and a 2000-block batch over Tor outlasts any sane budget —
-charging successful fetches against it would leave the last blocks unable to survive a blip the
-first ones would have. Sharing the deadline costs serving nothing, since it is only read after a
-call has already failed: a slow but working query still runs to completion however long it takes.
+**What is rationed is time spent retrying, measured from the first failure.** Getting this wrong is
+easy and both wrong answers were tried:
+
+- *A fresh allowance per call* lets a run spend it again at every stage. A run is several RPCs —
+  prune height, every height, then each block — so a source that recovers just long enough to get
+  past one stage can burn the allowance again at the next.
+- *One deadline from the start of the run* charges time spent **succeeding**. A query that had been
+  fetching happily for longer than the allowance hit its first transient error already past the
+  deadline and gave up with no retry at all. On a deep history over Tor, running longer than the
+  allowance is ordinary, so this turned a stale peer connection into precisely the "failed to fetch
+  history" the patch exists to remove. A slow query is not a failing query.
+
+So the run shares one allowance and only failures are charged to it. A run that is merely slow has
+spent nothing. Indexing keeps a fresh allowance per call, where it is there to ride out a restart
+rather than bound a wait and a 2000-block Tor batch outlasts anything worth setting. Concurrent
+fetchers each charge their own retrying, so the total charged can exceed the allowance while several
+are in flight — intended, since they retry at the same time and the wall clock is still about one
+allowance.
 
 What that costs is stated rather than waved away. `0014` makes a batch cost its slowest client
 instead of the sum, but `handle_events` still runs inline on the loop that drives `rpc.sync()`, so
-going from 10s to 60s raises the worst-case indexing stall to match. The trade is deliberate: the
+going from 10s to 60s raises the worst-case indexing stall to match — for a *failing* query. One
+that is succeeding holds the loop for as long as it takes, and always has. The trade is deliberate: the
 stall is bounded, nothing is lost because indexing resumes where it was, and it only happens when
 fetches are genuinely failing. Against that, the 10s bought a wallet that could not load its history
 at all.

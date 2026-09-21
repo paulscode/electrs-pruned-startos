@@ -1,6 +1,6 @@
-From 24747504ef8875a147a442ebbf87ae573d2d364b Mon Sep 17 00:00:00 2001
+From d89ed4b857badfacf6e32883affd94f6854de204 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
-Date: Mon, 21 Sep 2026 10:37:42 -0500
+Date: Mon, 21 Sep 2026 13:10:00 -0500
 Subject: [PATCH 14/15] server: answer a batch of clients together
 
 `handle_events` walked the batch one client after another, so the batch cost the sum
