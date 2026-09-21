@@ -290,6 +290,32 @@ duplicate fetch instead of joining one.
 
 **Retire when:** with `0002`.
 
+## What has tests, and what does not
+
+Each patch carries its own, and every patch in the set builds and passes standalone — 50 tests at
+`0012`, 55 at `0013`, 60 at `0014`, 68 at `0015`. The ones worth knowing about:
+
+| area | covered by |
+| --- | --- |
+| connection pool | hands each connection out once, blocks when all are busy, takes one back after an error |
+| fetch window | in order and bounded in flight, first error in request order wins, **work continues past an item still outstanding**, every run length × every concurrency, a `deliver` error ends the run |
+| serving a batch | request order kept, a disconnect discards what is behind it, a new connection is picked up with its requests, and the full truth table for what becomes of a peer afterwards |
+| retry loop | a transient failure is retried at all, a clean call costs nothing, a spent allowance gives up at once, an interrupt mid-backoff stops the loop |
+| retry allowance | a long *working* run keeps its allowance, retrying is charged across the run, indexing does not carry a charge between calls, the allowance outlasts a stalled fetch |
+
+Two of those are there specifically because the obvious implementation was wrong and shipped once
+before: *work continues past an item still outstanding* fails against the batch-and-wait fetch, and
+*a long working run keeps its allowance* fails against a deadline measured from the start of the
+run. Both were confirmed to fail against those implementations, not assumed to.
+
+Every test above was checked by mutation — break the thing, watch the right test catch it — rather
+than trusted because it passes.
+
+**What is not covered here.** `fetch_block_raw` in btc-rpc-proxy needs an RPC client, peers and real
+I/O, so the single-flight integration is exercised by the regtest harness rather than by unit tests;
+`SingleFlight` itself is tested in isolation. Nothing in this set is covered against a live pruned
+node except by the harness below.
+
 ## Verifying after a submodule bump
 
 The pruning behaviour is covered by the regtest harness in the

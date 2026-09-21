@@ -1,6 +1,6 @@
-From d89ed4b857badfacf6e32883affd94f6854de204 Mon Sep 17 00:00:00 2001
+From af6e5cba3b363bc6fba5f9c7d967e11d283529ab Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
-Date: Mon, 21 Sep 2026 13:10:00 -0500
+Date: Mon, 21 Sep 2026 13:42:19 -0500
 Subject: [PATCH 14/15] server: answer a batch of clients together
 
 `handle_events` walked the batch one client after another, so the batch cost the sum
@@ -31,14 +31,14 @@ Also corrects the write-timeout rationale in `accept_loop`. A wedged peer now ho
 worker rather than the loop directly, but the loop waits for that worker, so it still
 holds up everything behind it -- the timeout matters for the same reason as before.
 ---
- src/server.rs | 162 ++++++++++++++++++++++++++++++++++++++++----------
- 1 file changed, 131 insertions(+), 31 deletions(-)
+ src/server.rs | 218 +++++++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 187 insertions(+), 31 deletions(-)
 
 diff --git a/src/server.rs b/src/server.rs
-index 770dfbf..7101bdf 100644
+index 770dfbf..80fe3aa 100644
 --- a/src/server.rs
 +++ b/src/server.rs
-@@ -180,30 +180,83 @@ enum Message {
+@@ -180,30 +180,110 @@ enum Message {
      Done,
  }
  
@@ -89,15 +89,17 @@ index 770dfbf..7101bdf 100644
 +        .into_par_iter()
 +        .filter_map(|(mut peer, lines, done)| {
 +            let responses = rpc.handle_requests(&mut peer.client, &lines);
-+            match peer.send(responses) {
-+                Err(e) => {
-+                    error!("{}: disconnecting due to {}", peer.id, e);
++            let sent = peer.send(responses);
++            match outcome(&sent, done) {
++                Outcome::Disconnect => {
++                    if let Err(e) = &sent {
++                        error!("{}: disconnecting due to {}", peer.id, e);
++                    }
 +                    peer.disconnect();
 +                    None
 +                }
-+                // Already disconnected at the other end; just do not put it back.
-+                Ok(()) if done => None,
-+                Ok(()) => Some(peer),
++                Outcome::Forget => None,
++                Outcome::Keep => Some(peer),
 +            }
 +        })
 +        .collect();
@@ -113,6 +115,31 @@ index 770dfbf..7101bdf 100644
 -    peer_id: usize,
 -    messages: Vec<Message>,
 -) {
++/// What becomes of a client once its batch has been answered.
++#[derive(Debug, PartialEq, Eq)]
++enum Outcome {
++    /// Still connected and still wanted: put it back in the map.
++    Keep,
++    /// The write failed. Shut the socket down and drop it.
++    Disconnect,
++    /// It hung up. The socket is already closing, so drop it without shutting it down again.
++    Forget,
++}
++
++/// Decide it from the write result and whether the client hung up during the batch.
++///
++/// Split out of `handle_events` because it is the one part of the rewrite that changed how peers
++/// leave the map, and because the precedence is easy to invert by accident: a failed write wins
++/// over a clean disconnect, so a peer that both hung up *and* failed to receive its last bytes is
++/// still shut down rather than merely forgotten.
++fn outcome(sent: &Result<()>, done: bool) -> Outcome {
++    match (sent, done) {
++        (Err(_), _) => Outcome::Disconnect,
++        (Ok(()), true) => Outcome::Forget,
++        (Ok(()), false) => Outcome::Keep,
++    }
++}
++
 +/// Fold one client's batch into the connections it opened, the requests to answer, and whether
 +/// it hung up.
 +///
@@ -133,7 +160,7 @@ index 770dfbf..7101bdf 100644
              Message::Request(line) => lines.push(line),
              Message::Done => {
                  done = true;
-@@ -211,31 +264,20 @@ fn handle_peer_events(
+@@ -211,31 +291,20 @@ fn handle_peer_events(
              }
          }
      }
@@ -174,7 +201,7 @@ index 770dfbf..7101bdf 100644
          //
          // `try_clone` below dups the fd, and the option lives on the socket, so
          // setting it here also covers the clone handed to `Peer`.
-@@ -277,3 +319,61 @@ fn recv_loop(peer_id: usize, stream: &TcpStream, server_tx: Sender<Event>) -> Re
+@@ -277,3 +346,90 @@ fn recv_loop(peer_id: usize, stream: &TcpStream, server_tx: Sender<Event>) -> Re
      server_tx.send(Event { peer_id, msg })?;
      Ok(())
  }
@@ -221,6 +248,35 @@ index 770dfbf..7101bdf 100644
 +        assert_eq!(opened.len(), 1);
 +        assert_eq!(lines, vec!["version"]);
 +        assert!(!done);
++    }
++
++    /// The whole truth table for what happens to a client after its batch, including the
++    /// precedence that a failed write beats a clean disconnect. Inverting that would either leak
++    /// sockets that never got shut down, or shut down ones that were fine.
++    #[test]
++    fn the_outcome_of_a_batch_covers_every_case() {
++        use super::{outcome, Outcome};
++
++        assert_eq!(
++            outcome(&Ok(()), false),
++            Outcome::Keep,
++            "answered and still connected"
++        );
++        assert_eq!(
++            outcome(&Ok(()), true),
++            Outcome::Forget,
++            "answered and hung up: already closing, so do not shut it down again"
++        );
++        assert_eq!(
++            outcome(&Err(anyhow::anyhow!("broken pipe")), false),
++            Outcome::Disconnect,
++            "a failed write drops the client"
++        );
++        assert_eq!(
++            outcome(&Err(anyhow::anyhow!("broken pipe")), true),
++            Outcome::Disconnect,
++            "and beats the disconnect rather than being masked by it"
++        );
 +    }
 +
 +    /// A client that connects and immediately hangs up is reported as done with nothing to

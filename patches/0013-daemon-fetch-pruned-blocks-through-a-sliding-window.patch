@@ -1,6 +1,6 @@
-From 74e32e6e85c865f98a64fd72603194d4f85b7d72 Mon Sep 17 00:00:00 2001
+From 92f65750e6503683a7462f6ef1d62bdd33fd16c2 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
-Date: Mon, 21 Sep 2026 13:10:00 -0500
+Date: Mon, 21 Sep 2026 13:42:19 -0500
 Subject: [PATCH 13/15] daemon: fetch pruned blocks through a sliding window
 
 Every block on this path is one the local node has discarded, so each is a round
@@ -36,11 +36,11 @@ outstanding. That last is written as a liveness check rather than a timing compa
 so it cannot go flaky, and it fails against the batching implementation, which is the
 point of having it.
 ---
- src/daemon.rs | 290 ++++++++++++++++++++++++++++++++++++++++++++++----
- 1 file changed, 268 insertions(+), 22 deletions(-)
+ src/daemon.rs | 347 ++++++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 325 insertions(+), 22 deletions(-)
 
 diff --git a/src/daemon.rs b/src/daemon.rs
-index f423da4..bd13fbf 100644
+index f423da4..0d92222 100644
 --- a/src/daemon.rs
 +++ b/src/daemon.rs
 @@ -9,11 +9,13 @@ use parking_lot::Mutex;
@@ -265,7 +265,7 @@ index f423da4..bd13fbf 100644
              Ok(block) => match AnyHeader::parse(&block) {
                  // The expected case: shared history, byte-identical on both chains.
                  Ok(header) if header.block_hash() == hash => Some(block),
-@@ -935,6 +1052,135 @@ mod tests {
+@@ -935,6 +1052,192 @@ mod tests {
          assert_eq!(info.prune_height, None);
      }
  
@@ -305,6 +305,63 @@ index f423da4..bd13fbf 100644
 +        let peak = high_water.load(Ordering::SeqCst);
 +        assert!(peak > 1, "nothing ever ran concurrently");
 +        assert!(peak <= CONCURRENCY, "{} in flight, over the bound", peak);
++    }
++
++    /// The shapes a run can actually arrive in. `for_blocks_with` slices its batch into runs of
++    /// same-availability blocks, so a run of one, or one shorter than the window, is ordinary
++    /// rather than exotic -- and an empty slice must not spawn anything or hang waiting on it.
++    #[test]
++    fn the_window_handles_runs_of_any_length() {
++        for len in 0..(super::FETCH_CONCURRENCY * 2 + 1) {
++            for concurrency in 1..=(super::FETCH_CONCURRENCY + 2) {
++                let items: Vec<usize> = (0..len).collect();
++                let mut delivered = vec![];
++                super::pipeline(
++                    &items,
++                    concurrency,
++                    |i, &item| {
++                        assert_eq!(i, item, "the index handed to the fetch is the item's own");
++                        Ok(item)
++                    },
++                    |_, item| {
++                        delivered.push(item);
++                        Ok(())
++                    },
++                )
++                .unwrap();
++                assert_eq!(
++                    delivered, items,
++                    "{} item(s) at concurrency {}",
++                    len, concurrency
++                );
++            }
++        }
++    }
++
++    /// An error from `deliver` ends the run too, not just one from the fetch. The callers that
++    /// matter push into their own state here, and one that starts failing should stop the run
++    /// rather than have the remaining blocks fetched and handed to it anyway.
++    #[test]
++    fn a_failure_to_deliver_ends_the_run() {
++        let items: Vec<usize> = (0..8).collect();
++        let mut delivered = vec![];
++
++        let err = super::pipeline(
++            &items,
++            super::FETCH_CONCURRENCY,
++            |_, &item| Ok(item),
++            |_, item| {
++                if item == 3 {
++                    bail!("caller gave up at {}", item);
++                }
++                delivered.push(item);
++                Ok(())
++            },
++        )
++        .unwrap_err();
++
++        assert_eq!(delivered, vec![0, 1, 2], "nothing past the failure is delivered");
++        assert!(format!("{:#}", err).contains("caller gave up at 3"), "got: {:#}", err);
 +    }
 +
 +    /// The reason this is a window and not a batch, pinned.
