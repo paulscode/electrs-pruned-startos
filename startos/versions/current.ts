@@ -1,31 +1,28 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 const notes =
-  'Renames the node picklist and one entry in it. The action is now called ' +
-  '"Select Node" rather than "Select Bitcoin Service", which is what Mempool ' +
-  'Pruned calls the same choice, so the two packages name it the same way. ' +
+  'Fixes the indexer refusing to start against a node running Bitcoin Knots ' +
+  '29.4.2.knots20260508. ' +
   ' ' +
-  'The pre-RDTS companion node is now called "Bitcoin Knots (SHA256) ' +
-  'Companion", and the picklist and the dependency prompt follow it. Its ' +
-  'description now says what actually distinguishes it: it is a second node on ' +
-  'the same chain as your main Bitcoin service that never enforces BIP-110, so ' +
-  'if the network splits over that rule it follows the side that does not ' +
-  'require it. The old wording said it followed "the chain most hashpower ' +
-  'follows", which is true today and is exactly the thing that would stop being ' +
-  'true in the case the node exists for. ' +
+  'That release stopped reporting a "difficulty" field for blocks with the new ' +
+  'header format, because a BLAKE2b difficulty and a SHA256d one are different ' +
+  'units and cannot be compared. On this chain every block above the ' +
+  'activation has the new header, so the field is simply absent, and the ' +
+  'library this indexer reads the response with treated it as mandatory and ' +
+  'rejected the whole reply. ' +
   ' ' +
-  'Only labels changed. The packages behind them keep the same ids, so an ' +
-  'existing selection keeps working and nothing reindexes. ' +
+  'The symptom was a crash loop: the indexer started, loaded its headers, then ' +
+  'exited reporting "daemon not available" with "missing field difficulty" ' +
+  'underneath, and the health check reported the daemon as crashed. Nothing ' +
+  'was wrong with the node, and nothing was wrong with the index. ' +
   ' ' +
-  'The instructions also correct a claim about SSL. They said no plaintext ' +
-  'port is reachable from off the server, so a wallet always needs SSL on. ' +
-  'That holds for LAN, .local and domain addresses, but not for Tor: the Tor ' +
-  'service points an onion at whichever bridge address its SSL toggle selects, ' +
-  'so an onion added with that toggle off carries plain TCP and a wallet using ' +
-  'it needs SSL off.'
+  'It now reads only the fields it actually uses, none of which is difficulty, ' +
+  'and ignores the rest. No reindex is needed and no data was lost: the ' +
+  'indexer never got as far as writing anything. If yours is in this state, ' +
+  'updating is all that is required.'
 
 export const current = VersionInfo.of({
-  version: '0.11.1:38',
+  version: '0.11.1:39',
   releaseNotes: {
     en_US: notes,
     es_ES: notes,
@@ -34,9 +31,8 @@ export const current = VersionInfo.of({
     fr_FR: notes,
   },
   migrations: {
-    // Nothing to migrate. Display strings only: the stored `backend` value is
-    // the package id, not the label, so a selection made under the old wording
-    // still resolves and the address index is untouched.
+    // Nothing to migrate. The change is in how one RPC reply is parsed; the
+    // index on disk is untouched and was never reached by the failure.
     up: async ({ effects }) => {},
     down: IMPOSSIBLE,
   },
