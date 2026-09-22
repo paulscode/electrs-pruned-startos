@@ -202,7 +202,13 @@ Backing the index up would not be much better than rebuilding it: it is large, i
 ## Limitations and Differences
 
 1. **The index is not backed up**, so a restore means rebuilding it — hours, or far longer on a long-pruned node (see 3).
-2. **`blockchain.transaction.get` with `verbose=true` fails for blocks Bitcoin has pruned.** Its second step is `getrawtransaction`. The RPC proxy does intercept that, but only when the call carries a blockhash, and a pruned block gives electrs none to pass. The non-verbose form, which is what wallets normally use, works. Known gap.
+2. **`blockchain.transaction.get` with `verbose=true` works for pruned blocks.** An earlier version of this note said it did not, on the grounds that electrs had no blockhash to pass to `getrawtransaction`. That was wrong: `transaction_get` looks the blockhash up through `Tracker::lookup_transaction` first and passes it, which is upstream behaviour and unchanged here. Verified on a live pruned node at `0.11.1:42`, for a 2010 transaction and for one in a block above the chain split that the node had pruned, both returning a blockhash.
+
+   What does fail is a transaction **electrs has not indexed**. Then the lookup yields nothing, the call goes out with no blockhash, and a node without `txindex` answers:
+
+   > `No such mempool transaction. Use -txindex or provide a block hash to enable blockchain transaction queries.`
+
+   **That message is misleading here and `txindex` is not the fix** (this package neither needs nor requests it). It means only that the transaction is not in electrs's index: it is on the other side of the chain split, or unconfirmed and gone from the mempool, or the index does not cover its block. Check the txid against the node — `getblockhash` for the height, then `getrawtransaction <txid> true <blockhash>` — before suspecting pruning.
    On a BLAKE2b chain the verbose form additionally fails for every block above 961640 unless Bitcoin runs `paulscode/btc-rpc-proxy:v0.8.0-blake2b.1` or later: a stock proxy cannot parse a 164-byte header, so any request it intercepts and parses returns `IO error: failed to fill whole buffer`. This is not limited to pruned blocks.
 3. **First index on an already-pruned node is slow.** Blocks below the prune point are fetched from network peers — measured ~162 ms each on clearnet when fetched one at a time, materially worse over Tor. Several are now kept in flight at once, but the ceiling is contention for a limited set of peers rather than how many requests are outstanding, so the gain is a small multiple and not proportional. Installing before or during Bitcoin's own sync avoids this almost entirely, because blocks are indexed over the fast local link before pruning discards them. Pointing the package at a second, archival node removes it for all the history the two chains share.
 4. **Mainnet only.** The network is pinned in the config.

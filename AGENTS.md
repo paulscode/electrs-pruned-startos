@@ -53,12 +53,22 @@ still applies; read the upstream repo's notes too when touching shared code.
   prune height come one at a time over RPC from network peers: measured ~162 ms each on clearnet,
   and substantially worse over Tor. Indexing *alongside* bitcoind's own sync is far faster, because
   blocks are taken over p2p before they are pruned. Keep `instructions.md` honest about this.
-- **`blockchain.transaction.get` with `verbose=true` fails for pruned blocks.** Its second leg is
-  `getrawtransaction`. The claim that the proxy does not intercept it is out of date: v0.8.0 does,
-  but only when the call carries a blockhash, and it passes the call through without one. A pruned
-  block still has no blockhash to offer from electrs's side, so the gap stands. Known gap, not a
-  regression. Separately, on a BLAKE2b chain the intercepted form fails too on a stock proxy; see
-  the v2 note below.
+- **`blockchain.transaction.get` with `verbose=true` works for pruned blocks; the old note here was
+  wrong.** It said electrs had no blockhash to pass to `getrawtransaction`. It does:
+  `transaction_get` calls `Tracker::lookup_transaction` first, which fetches the candidate block
+  (from the helper, or from peers through the proxy) and hands back the blockhash, then passes it.
+  That is upstream code, unchanged in v0.11.1. Verified on a live pruned node at `0.11.1:42` against
+  a 2010 transaction and against one in a block above the chain split that the node had pruned.
+
+  What fails is a transaction **electrs has not indexed**: the lookup yields nothing, the call goes
+  out with a null blockhash, and bitcoind answers `-5 No such mempool transaction. Use -txindex or
+  provide a block hash`. **Do not follow that advice.** `txindex` is not required by this package and
+  must not be requested; the message means the transaction is absent from the index -- on the other
+  side of the chain split, unconfirmed and dropped, or in a block the index does not cover.
+  Reproduced exactly by asking for a txid that cannot exist.
+
+  Separately, on a BLAKE2b chain the intercepted form fails on a stock proxy; see the v2 note below.
+
 - **This package can index a BLAKE2b chain.** Patches `0004`-`0006` carry the header-v2 support:
   164-byte headers, BLAKE2b block identity, and a replacement for `bsl::Block::visit`, which reads
   the transaction count from a hardcoded offset 80 and silently indexes a v2 block as empty. Pick
