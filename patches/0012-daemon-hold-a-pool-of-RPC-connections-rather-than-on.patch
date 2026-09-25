@@ -1,7 +1,7 @@
 From ee43cd11182a278c952b831fecb66f41586b53eb Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Mon, 21 Sep 2026 13:10:00 -0500
-Subject: [PATCH 12/15] daemon: hold a pool of RPC connections rather than one
+Subject: [PATCH 12/16] daemon: hold a pool of RPC connections rather than one
 
 `jsonrpc`'s transport keeps a single socket behind a mutex, so every call on a
 `Client` waits for the one before it. On a single-threaded server that costs

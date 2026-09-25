@@ -24,8 +24,10 @@ export const storeJson = FileHelper.json(
       .catch(defaultBackend),
     /**
      * The backend the current index was built against. Compared with `backend`
-     * at startup: a mismatch means the index describes a different chain, so it
-     * is wiped rather than reorganised. See init/backendGuard.ts.
+     * at startup. A mismatch no longer wipes the index: electrs trims it back to
+     * the last block the new node agrees with and indexes forward from there, and
+     * only an index for a different network is deleted. See the backend-change
+     * block in main.ts.
      */
     indexedBackend: z
       .enum(backendIds as [BackendId, ...BackendId[]])

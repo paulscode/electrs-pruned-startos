@@ -141,17 +141,27 @@ The scheme override is what renders an address as `ssl://host:port`; without it 
 
 ## Installation and First-Run Flow
 
-Install seeds the config and nothing else. There is no credential and no task on this service.
+Install seeds the config and settles which Bitcoin service to index. It does not assume one. If exactly one supported service is installed, that one is selected. If there are several, or none yet, a **critical** task holds the service stopped until the operator picks one in **Select Node** (see [Tasks](#tasks)). A default used to be applied silently, and on a server running both the SHA256 and BLAKE2b nodes it indexed the one the user did not mean for 19 days; which chain a wallet sees is not something to guess. It cannot be guessed from the id either, since Retropex's BLAKE2b package takes the official `bitcoind` id.
 
 What governs the first run is Bitcoin: electrs cannot index until Bitcoin has finished its own sync, and the dependency's sync check is what holds it there. Once Bitcoin is ready, electrs begins building its address index, which **takes hours on first run** and is the longest thing this package does.
 
-**The index is built once and never rebuilt.** That is worth knowing because the two states look similar from outside — see [Health Checks](#health-checks).
+**The index is built once and never rebuilt.** That is worth knowing because the two states look similar from outside — see [Health Checks](#health-checks). The one exception is switching to a node on another chain, which re-indexes from the last block the index and the node agree on (see [Select Node](#select-node)).
 
 A notification is sent when the index first completes, so the wait does not have to be watched.
 
 ## Actions
 
-One action.
+Two actions.
+
+### Select Node
+
+Chooses which installed Bitcoin service electrs indexes: the official `bitcoind`, the SHA256 companion, or the BLAKE2b companion.
+
+- **What it changes:** `backend` in `store.json`, which decides the required dependency, the mounted volume and the RPC and P2P addresses.
+- **Cost:** a restart, then re-indexing from the last block the index and the new node agree on. Between the SHA256 and BLAKE2b chains that is the last shared block, 961,631, so only the blocks since the fork are indexed. It used to delete the whole index and rebuild: one user waited 36 hours to rebuild all 973,000 blocks. Measured on a test server at `0.11.1:43`: SHA256 to the archival BLAKE2b node indexed 12,384 blocks in about two minutes; back to the pruned SHA256 node took about 25 minutes, nearly all of it fetching ~4,000 post-fork blocks that node had pruned.
+- **Why keeping the index is safe:** electrs checks its index against the node before serving anything and trims back to the last block they agree on (patch 0016). Without that, a node that had rejected the indexed tip, which is what `invalidateblock` leaves when an operator picks a side of a fork, would leave electrs advertising that tip and hanging on the first query that needed one of its blocks. `spikes/harness/chain_switch.py` in the electrs-pruned repo reproduces both, against real nodes.
+- **What still goes:** an index for a different *network*. electrs keeps one database directory per network, and a mainnet index moved to a testnet node shares nothing but disk.
+- **Repeat safety:** idempotent. Selecting the service already selected does nothing.
 
 ### Configure
 
@@ -164,7 +174,9 @@ Sets the log level and two indexing limits.
 
 ## Tasks
 
-**None.** The standard Electrs package raises a recurring `critical` task on Bitcoin's page forcing pruning off; this package deliberately does not, since pruned operation is supported.
+**One, at install only:** a `critical` task to run **Select Node**, raised when the choice of node is not obvious, meaning several supported services are installed or none yet. It keeps the service stopped until answered. With exactly one installed, that one is selected and no task is raised. Updates and restores keep the choice already made.
+
+The standard Electrs package also raises a recurring `critical` task on Bitcoin's page forcing pruning off. This package deliberately does not, since pruned operation is supported.
 
 ## Health Checks
 
@@ -180,6 +192,10 @@ Two checks, and the second one is the interesting one.
 **"Sync Progress" is confirmed positively, and that is not a stylistic choice.** During an index build electrs processes a whole batch of blocks — minutes at a time — before servicing any request, so it very often does not answer at all rather than answering "not ready". The check therefore counts only a real reply as synced, and treats a timeout as not-synced. Reading it the other way round reports "Fully synced" throughout the entire build.
 
 **It also retries only after the first success.** Before then a non-answer is the norm and one attempt says all it can. Afterwards a non-answer is surprising enough to be worth re-asking, because on modest hardware indexing a single block — or the database compaction behind it — can block the query loop past the timeout, and one such blip is not a sync regression. A *slow client* can also cause it: electrs answers the clients in a batch together rather than one after another, so a batch costs its slowest client rather than all of them added up, but the loop that indexes is held until that batch is done. A wallet loading history from below the prune point can therefore make Sync Progress stop answering for as long as its lookup takes.
+
+**When electrs is not up, the checks say why, and say it on the line the operator is looking at.** The daemon holds electrs back until the node's RPC cookie exists, and the node deletes its cookie whenever it stops, so every restart of the node spends a while with electrs deliberately not running. Both checks test for the cookie the same way the daemon does. While it is missing, **"Electrum Server" reads "Waiting for <node> to start"** as `starting`. That is the line that matters during an outage, because StartOS does not run "Sync Progress" until "Electrum Server" is ready; Sync Progress shows its neutral `waiting` state meanwhile, and says the same thing itself only if the node vanishes while it is already running. Only when the cookie is present and electrs still is not listening does Sync Progress report that electrs exited, as a failure. Before this, every restart of the node could read "exited and is being restarted; check the logs": in one user's log all ten times it said so were that wait, which is how a working setup came to be reported as unstable.
+
+**"Listening" means state `LISTEN`, which the SDK's own check does not test.** `sdk.healthCheck.checkPortListening` matches any socket whose local port is 50001, in any state. When electrs exits with wallets connected, their connections stay in `/proc/net/tcp` for about a minute in TIME_WAIT, and the SDK check reports electrs listening when nothing is: on a live server, with the node stopped and electrs waiting for its cookie, Sync Progress said "busy indexing" 34 seconds after electrs had exited, and the same false positive let the daemon's ready check pass. `listening.ts` reads the `st` column and requires `0A`. Do not switch back to the SDK function until the fix, proposed as [Start9Labs/start-technologies#4091](https://github.com/Start9Labs/start-technologies/pull/4091), ships in the SDK version this package pins.
 
 That distinction drives the message, too. Before the first success it says the index is building and warns that it takes hours. Afterwards it says electrs is busy and this usually clears on its own — because **a built index is never rebuilt**, and telling a fully-synced user their index is rebuilding would send them to reindex a perfectly good one.
 
@@ -222,7 +238,7 @@ Backing the index up would not be much better than rebuilding it: it is large, i
 ## Quick Reference for AI Consumers
 
 ```yaml
-package_id: electrs
+package_id: electrs-pruned
 image: built from ./Dockerfile
 architectures:
   - x86_64
@@ -233,17 +249,21 @@ volumes:
   main: /data # bitcoin's main volume is mounted read-only at /mnt/bitcoind
 file_models:
   - electrs.toml
-  - store.json # everSynced / syncNotified flags
+  - store.json # backend, indexedBackend, indexedNetwork, everSynced, syncNotified
 startos_managed_env_vars: [] # configuration is written into electrs.toml
 dependencies:
   - <selected backend> # required, kind: running; checks per backend, see backends.ts
 interfaces:
   main: { type: api, port: 50001 } # TLS-terminated by StartOS; plaintext is bridge-only
 actions:
+  - select-backend # which node to index; switching keeps the index, re-indexes from the last agreed block
   - config
 tasks:
-  - { action: 'bitcoind:autoconfig', severity: critical } # on Bitcoin's page, recurring
+  - { action: select-backend, severity: critical } # install only, when several nodes or none are installed
+  # deliberately NOT upstream's recurring bitcoind:autoconfig prune task; pruning is supported
 health_checks:
   - electrs # displayed "Electrum Server"; binds before it connects to Bitcoin
   - sync # displayed "Sync Progress"; positive confirmation only
+  # both say "Waiting for <node> to start" while the node's cookie is absent; "Electrum Server" is the one seen
+  # listening means TCP state LISTEN (listening.ts), not the SDK's checkPortListening, which counts TIME_WAIT
 ```

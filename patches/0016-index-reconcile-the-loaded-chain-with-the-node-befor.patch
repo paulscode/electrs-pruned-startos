@@ -1,0 +1,304 @@
+From c39fce0874f726325a19974a38188b3852d238bb Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Thu, 24 Sep 2026 20:24:46 -0500
+Subject: [PATCH 16/16] index: reconcile the loaded chain with the node before
+ serving
+
+The Electrum package lets an operator switch between nodes on the two sides of a chain
+fork, which share every block below the split. It used to wipe the index on a switch,
+which cost one user a 36-hour rebuild for a chain that shared all but ~6000 blocks with
+the old one. The package now keeps the index; this is what makes that safe.
+
+At startup, before the server loop handles anything, the index tip is checked against
+the node: one `getblockhash` in the usual case, and if the node's active chain does not
+contain it, a binary search (about twenty calls on mainnet) for the highest height both
+agree on, and the header chain is trimmed back to there. Sound because agreement is
+monotone -- a block hash commits to its ancestors, so chains that diverge never agree
+again, and a shorter node agrees with nothing above its tip.
+
+For two independently synced nodes `getheaders` already finds the common ancestor,
+because neither knows the other's post-split blocks. What this adds there is
+precision: the locator thins out exponentially, so the node's answer overshoots the
+split by up to its depth again; this lands on it exactly.
+
+The case it is needed for is a node that knows the indexed tip, has it off its active
+chain, and descending from its own tip -- what `invalidateblock` leaves, the usual way
+an operator picks a side of a fork. Core answers that locator with nothing. electrs
+then keeps the rejected chain, advertises its tip, and the first query needing one of
+those blocks asks the node for it: the node stays silent and electrs hangs, or drops the
+connection and electrs exits, onto the same chain on restart.
+
+I first described that hazard more broadly, as any switch to a node behind the fork,
+and the regtest run corrected me: a node that never saw the other chain's blocks handles
+the locator fine. The comment says only what the run showed.
+
+Rows written for discarded blocks stay, as they do for every electrs reorg: rows are
+keyed by height and a lookup scans this chain's block at that height, so a leftover row
+costs a wasted scan, never a wrong answer. Nothing is persisted; until indexing writes a
+new tip a restart reloads the old chain and trims it again.
+
+Tests: the search is a pure function with six tests, including every boundary for
+every tip up to 69, a failed RPC surfacing as an error rather than a disagreement, and
+the tip fast path costing one call; three mutations each caught. End to end,
+spikes/harness/chain_switch.py drives two diverging regtest nodes through a switch, a
+switch back, an invalidateblock below the fork and a reconsiderblock, 13/13; and against
+a build without this call it shows the rejected tip advertised and the next query hung.
+---
+ src/daemon.rs   |  15 +++++
+ src/electrum.rs |   5 +-
+ src/index.rs    | 167 ++++++++++++++++++++++++++++++++++++++++++++++++
+ src/tracker.rs  |   5 ++
+ 4 files changed, 191 insertions(+), 1 deletion(-)
+
+diff --git a/src/daemon.rs b/src/daemon.rs
+index 114e1e1..2166bd7 100644
+--- a/src/daemon.rs
++++ b/src/daemon.rs
+@@ -745,6 +745,21 @@ impl Daemon {
+             .context("failed to submitpackage package")
+     }
+ 
++    /// The hash of the block at `height` on the node's active chain, or `None` above its tip.
++    ///
++    /// `getblockhash` answers from the header chain, so a pruned node answers it for any height,
++    /// and it returns a bare string: nothing here for a changed RPC shape to break.
++    pub(crate) fn get_block_hash_at(&self, height: usize) -> Result<Option<BlockHash>> {
++        match self.rpc.get().get_block_hash(height as u64) {
++            Ok(hash) => Ok(Some(hash)),
++            Err(err) => match extract_bitcoind_error(&err) {
++                // RPC_INVALID_PARAMETER, "Block height out of range": above the node's tip.
++                Some(e) if e.code == -8 => Ok(None),
++                _ => Err(err).with_context(|| format!("failed to get block hash at {}", height)),
++            },
++        }
++    }
++
+     pub(crate) fn get_transaction_info(
+         &self,
+         txid: &Txid,
+diff --git a/src/electrum.rs b/src/electrum.rs
+index f238b23..9d9855a 100644
+--- a/src/electrum.rs
++++ b/src/electrum.rs
+@@ -166,9 +166,12 @@ impl Rpc {
+             metrics::default_duration_buckets(),
+         );
+ 
+-        let tracker = Tracker::new(config, metrics)?;
++        let mut tracker = Tracker::new(config, metrics)?;
+         let signal = Signal::new();
+         let daemon = Daemon::connect(config, signal.exit_flag(), tracker.metrics())?;
++        // Before the server loop starts, so no request -- not even a header request, which is
++        // answered before the index is ready -- can see a chain the node does not have.
++        tracker.reconcile_with_node(&daemon)?;
+         let cache = Cache::new(tracker.metrics());
+         Ok(Self {
+             tracker,
+diff --git a/src/index.rs b/src/index.rs
+index 652de9a..149c4c7 100644
+--- a/src/index.rs
++++ b/src/index.rs
+@@ -175,6 +175,63 @@ impl Index {
+     }
+ 
+     // Return `Ok(true)` when the chain is fully synced and the index is compacted.
++    /// Trim the loaded header chain back to the last block the node also has on its active chain.
++    ///
++    /// The index on disk was built against whichever node electrs was pointed at when it was built,
++    /// and that need not be the node it is pointed at now. The Electrum package lets an operator
++    /// switch between nodes on the two sides of a chain fork, which share every block below the
++    /// split and none above it. Keeping the shared part is worth a great deal -- it is nearly the
++    /// whole index -- but only if nothing from the other side is ever served as this one's.
++    ///
++    /// Usually `getheaders` sorts that out by itself. Two nodes synced independently do not know
++    /// each other's blocks past the split, so the node skips electrs's recent locator entries as
++    /// unknown, finds a shared one, and sends everything after it. What this adds there is
++    /// precision: the locator's entries thin out exponentially, so the node's answer overshoots
++    /// the split by up to its depth again, and this lands on it exactly.
++    ///
++    /// The case `getheaders` cannot handle is a node that *knows* the indexed tip, has it off its
++    /// active chain, and has it descending from its own tip. That is what `invalidateblock`
++    /// leaves behind, which is the usual way an operator picks a side of a fork. Bitcoin Core
++    /// answers such a locator with nothing, so electrs keeps the rejected chain and advertises its
++    /// tip to wallets. The first query that needs one of those blocks asks the node for it; the
++    /// node will not send a block it rejected, and electrs either hangs on the silence or exits
++    /// when the connection drops -- then reloads the same chain on restart. Reproduced against
++    /// real nodes, with and without this, in `spikes/harness/chain_switch.py`.
++    ///
++    /// So the chain is checked against the node before anything is served: the tip first, which
++    /// is one RPC and the only one in the usual case, then a binary search for the highest height
++    /// where both agree. That is sound because agreement is monotone -- a block hash commits to
++    /// all of its ancestors, so two chains that diverge never agree again, and a shorter node
++    /// agrees with nothing above its tip.
++    ///
++    /// Rows written for the discarded blocks stay in the database. That is how electrs treats
++    /// every reorg: rows are keyed by height, a lookup resolves the height to this chain's block
++    /// and scans that block, so a leftover row costs a wasted scan and never a wrong answer.
++    ///
++    /// Nothing is persisted. Until indexing overwrites the stored tip, a restart loads the old
++    /// chain and trims it again, which is idempotent.
++    pub(crate) fn reconcile_with_node(&mut self, daemon: &Daemon) -> Result<()> {
++        let tip = self.chain.height();
++        if tip == 0 {
++            return Ok(()); // nothing indexed yet
++        }
++        let chain = &self.chain;
++        let agreed = last_agreed_height(tip, |height| {
++            Ok(daemon.get_block_hash_at(height)? == chain.get_block_hash(height))
++        })
++        .context("failed to compare the index with the node's chain")?;
++        if agreed < tip {
++            warn!(
++                "the node does not have the indexed tip at height {} on its active chain; the two \
++                 last agree at height {}, so indexing resumes from there",
++                tip, agreed
++            );
++            self.chain.drop_last_headers(tip - agreed);
++            self.stats.observe_chain(&self.chain);
++        }
++        Ok(())
++    }
++
+     pub(crate) fn sync(&mut self, daemon: &Daemon, exit_flag: &ExitFlag) -> Result<bool> {
+         let new_headers = self
+             .stats
+@@ -272,6 +329,32 @@ impl Index {
+     }
+ }
+ 
++/// The highest height at or below `tip` where the index and the node agree.
++///
++/// `agrees(height)` must be monotone -- true from genesis up to some height, false above it --
++/// which holds for block hashes because each commits to its ancestors. Genesis is taken as agreed
++/// rather than asked about: it is fixed per network, and electrs keeps a separate database per
++/// network, so there is nothing to learn from asking.
++///
++/// Asks about the tip first, so a node that already has it costs one call. Otherwise a binary
++/// search, about twenty calls for a mainnet-sized chain.
++fn last_agreed_height(tip: usize, mut agrees: impl FnMut(usize) -> Result<bool>) -> Result<usize> {
++    if agrees(tip)? {
++        return Ok(tip);
++    }
++    // Invariant: agrees(lo) and !agrees(hi).
++    let (mut lo, mut hi) = (0, tip);
++    while hi - lo > 1 {
++        let mid = lo + (hi - lo) / 2;
++        if agrees(mid)? {
++            lo = mid;
++        } else {
++            hi = mid;
++        }
++    }
++    Ok(lo)
++}
++
+ fn index_single_block(
+     block_hash: BlockHash,
+     block: SerBlock,
+@@ -333,3 +416,87 @@ fn index_single_block(
+         .expect("in-memory writers don't error");
+     debug_assert_eq!(len, BlockHash::LEN);
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::last_agreed_height;
++    use std::cell::Cell;
++
++    /// Agreement up to and including `last`, nothing above: the shape every real comparison has.
++    fn agree_to(last: usize, asked: &Cell<usize>) -> impl FnMut(usize) -> anyhow::Result<bool> + '_ {
++        move |height| {
++            asked.set(asked.get() + 1);
++            Ok(height <= last)
++        }
++    }
++
++    /// The usual startup: the node has the indexed tip, and finding that out costs one call.
++    #[test]
++    fn a_node_that_has_the_tip_costs_one_call() {
++        let asked = Cell::new(0);
++        assert_eq!(last_agreed_height(973_996, agree_to(973_996, &asked)).unwrap(), 973_996);
++        assert_eq!(asked.get(), 1, "only the tip was asked about");
++    }
++
++    /// Switched to the other side of the fork: agreement ends at the last shared block.
++    #[test]
++    fn a_switch_across_the_fork_lands_on_the_last_shared_block() {
++        let asked = Cell::new(0);
++        assert_eq!(last_agreed_height(967_822, agree_to(961_631, &asked)).unwrap(), 961_631);
++        assert!(asked.get() <= 22, "a binary search, not a walk: {} calls", asked.get());
++    }
++
++    /// The case `getheaders` gets wrong on its own: a node that is behind the index, whether on
++    /// the same chain or stuck below the split on the other one. Agreement ends at the node's tip.
++    #[test]
++    fn a_node_behind_the_index_lands_on_the_node_tip() {
++        let asked = Cell::new(0);
++        assert_eq!(last_agreed_height(967_822, agree_to(500_000, &asked)).unwrap(), 500_000);
++    }
++
++    /// Nothing shared but genesis, which is taken as agreed rather than asked about.
++    #[test]
++    fn nothing_shared_but_genesis_lands_on_genesis() {
++        let asked = Cell::new(0);
++        let mut probe = agree_to(0, &asked);
++        let got = last_agreed_height(1_000, |h| {
++            assert_ne!(h, 0, "genesis is never asked about");
++            probe(h)
++        })
++        .unwrap();
++        assert_eq!(got, 0);
++    }
++
++    /// Every boundary lands exactly, including the edges beside genesis and the tip, which is
++    /// where an off-by-one in a binary search lives.
++    #[test]
++    fn every_boundary_is_found_exactly() {
++        for tip in 1..70usize {
++            for last in 0..=tip {
++                let asked = Cell::new(0);
++                assert_eq!(
++                    last_agreed_height(tip, agree_to(last, &asked)).unwrap(),
++                    last,
++                    "tip {} agreeing to {}",
++                    tip,
++                    last
++                );
++            }
++        }
++    }
++
++    /// A failed call to the node is an error, not a guess. Treating it as disagreement would trim
++    /// a good index back to wherever the search happened to be.
++    #[test]
++    fn a_failed_call_is_an_error_not_a_disagreement() {
++        let err = last_agreed_height(100, |h| {
++            if h == 100 {
++                Ok(false)
++            } else {
++                anyhow::bail!("node unreachable")
++            }
++        })
++        .unwrap_err();
++        assert!(format!("{:#}", err).contains("node unreachable"));
++    }
++}
+diff --git a/src/tracker.rs b/src/tracker.rs
+index 61530bd..2273880 100644
+--- a/src/tracker.rs
++++ b/src/tracker.rs
+@@ -72,6 +72,11 @@ impl Tracker {
+         status.get_unspent(self.index.chain())
+     }
+ 
++    /// See [`Index::reconcile_with_node`].
++    pub(crate) fn reconcile_with_node(&mut self, daemon: &Daemon) -> Result<()> {
++        self.index.reconcile_with_node(daemon)
++    }
++
+     pub(crate) fn sync(&mut self, daemon: &Daemon, exit_flag: &ExitFlag) -> Result<bool> {
+         let done = self.index.sync(daemon, exit_flag)?;
+         if done && !self.ignore_mempool {
+-- 
+2.43.0
+

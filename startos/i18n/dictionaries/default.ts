@@ -45,6 +45,9 @@ const dict = {
   'Electrs is not running. It exited and is being restarted; if this persists, check the logs.': 45,
   'A second node on the same chain as your main Bitcoin service, installed alongside it. It never enforces BIP-110, so if the network splits over that rule this one follows the side that does not require it.': 46,
   'Select Node': 47,
+  'Electrs keeps its address index and indexes again only from the last block the two services agree on. Between the SHA256 and BLAKE2b nodes that is the fork, so this is a small part of a full rebuild, though it can still take a while if the new node has already pruned those blocks. A service on a different network, such as a testnet, starts from scratch.': 48,
+  'Choose which Bitcoin node Electrs should index. It decides which chain your wallets see, so it is not guessed.': 49,
+  'Waiting for ${node} to start. Electrs starts as soon as the node is up; if it is already running and this persists, check the logs.': 50,
 } as const
 
 /**

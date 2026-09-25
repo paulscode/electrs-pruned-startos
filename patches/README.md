@@ -23,6 +23,8 @@ node's block reads cost seconds rather than milliseconds, and the serving path w
 latter. Read them together, and read `0014` before `0015`: `0015` raises a timeout, `0014` reduces
 what waiting on it costs, and neither is the whole story on its own.
 
+`0016` is what lets the package keep the index when the operator switches node; see its entry.
+
 **These files are generated, not edited.** They come from `git format-patch` over the commits in the
 `electrs-pruned` repo's `vendor/electrs`, which is the single source for this fork. Edit there, run the
 regtest harness there, regenerate, and copy the result here.
@@ -290,10 +292,40 @@ duplicate fetch instead of joining one.
 
 **Retire when:** with `0002`.
 
+## 0016 — reconcile the loaded chain with the node before serving
+
+What makes it safe for **Select Node** to keep the index across a switch instead of wiping it. At
+startup, before the server loop handles anything, the index tip is checked against the node: one
+`getblockhash` in the usual case, and if the node's active chain does not contain it, a binary search
+(about twenty calls on mainnet) for the highest height both agree on, and the header chain is trimmed
+back to there. Sound because agreement is monotone: a block hash commits to its ancestors, so two
+chains that diverge never agree again, and a shorter node agrees with nothing above its tip.
+
+**Where it matters, precisely.** For two independently synced nodes on different chains, plain
+`getheaders` already finds the fork, because neither node knows the other's post-split blocks and
+skips them in electrs's locator. There this only adds precision: the locator thins out exponentially,
+so the node's answer overshoots the split by up to its depth again, and this lands on it exactly. The
+case it is needed for is a node that *knows* the indexed tip, has it off its active chain, and has it
+descending from its own tip, which is what `invalidateblock` leaves, the usual way an operator picks
+a side of a fork. Core answers that locator with nothing. Without this, electrs keeps the rejected
+chain, advertises its tip to wallets, and the first query needing one of those blocks asks the node
+for it: the node stays silent and electrs hangs, or drops the connection and electrs exits, then
+reloads the same chain on restart.
+
+I first described the hazard more broadly, as any switch to a node that is behind the fork, and the
+regtest run corrected me. The entry says only what the run showed.
+
+Rows written for discarded blocks stay in the database, as they do for every electrs reorg: rows are
+keyed by height, and a lookup scans this chain's block at that height, so a leftover row costs a
+wasted scan and never a wrong answer. Nothing is persisted; until indexing writes a new tip, a restart
+reloads the old chain and trims it again.
+
+**Retire when:** upstream reconciles with the node at startup. Not proposed upstream yet.
+
 ## What has tests, and what does not
 
 Each patch carries its own, and every patch in the set builds and passes standalone — 50 tests at
-`0012`, 55 at `0013`, 60 at `0014`, 68 at `0015`. The ones worth knowing about:
+`0012`, 55 at `0013`, 60 at `0014`, 68 at `0015`, 74 at `0016`. The ones worth knowing about:
 
 | area | covered by |
 | --- | --- |
@@ -302,6 +334,7 @@ Each patch carries its own, and every patch in the set builds and passes standal
 | serving a batch | request order kept, a disconnect discards what is behind it, a new connection is picked up with its requests, and the full truth table for what becomes of a peer afterwards |
 | retry loop | a transient failure is retried at all, a clean call costs nothing, a spent allowance gives up at once, an interrupt mid-backoff stops the loop |
 | retry allowance | a long *working* run keeps its allowance, retrying is charged across the run, indexing does not carry a charge between calls, the allowance outlasts a stalled fetch |
+| reconcile with the node (`0016`) | the tip fast path costs one call, a switch lands on the last shared block, a node behind the index lands on its tip, genesis-only, every boundary for every tip up to 69, a failed call is an error rather than a disagreement |
 
 Two of those are there specifically because the obvious implementation was wrong and shipped once
 before: *work continues past an item still outstanding* fails against the batch-and-wait fetch, and
@@ -310,6 +343,13 @@ run. Both were confirmed to fail against those implementations, not assumed to.
 
 Every test above was checked by mutation — break the thing, watch the right test catch it — rather
 than trusted because it passes.
+
+**End to end, `0016` is also driven against real nodes.** `spikes/harness/chain_switch.py` in the
+electrs-pruned repo builds two regtest nodes that share 150 blocks and then diverge, and switches one
+index between them: across the fork, back again, onto a node that has invalidated a block below the
+fork, and after it reconsiders. 13/13 checks with `0016`. Against a build without it, the same run
+shows the rejected tip advertised and the next history query hanging the server. Run it after any
+change to how the index loads or syncs.
 
 **What is not covered here.** `fetch_block_raw` in btc-rpc-proxy needs an RPC client, peers and real
 I/O, so the single-flight integration is exercised by the regtest harness rather than by unit tests;

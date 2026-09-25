@@ -69,6 +69,31 @@ still applies; read the upstream repo's notes too when touching shared code.
 
   Separately, on a BLAKE2b chain the intercepted form fails on a stock proxy; see the v2 note below.
 
+- **Switching node keeps the index. Do not reintroduce a wipe.** Select Node used to delete the
+  index and rebuild; one user waited 36 hours for a SHA256 -> BLAKE2b switch to rebuild all 973,000
+  blocks, when only the ~12,000 since the fork needed indexing (two minutes on the test server
+  now). Now only an index for a different *network* is
+  deleted, and electrs (patch `0016`) checks its tip against the node at startup and trims back to
+  the last block they agree on. That check is what makes keeping it safe: without it, a node that
+  has rejected the indexed tip (what `invalidateblock` leaves) gets electrs advertising that tip
+  and hanging on the first query needing one of its blocks. For two independently synced nodes
+  plain `getheaders` would find the fork anyway; the check matters for the rejected-tip case and
+  adds precision otherwise. Proven with and without it in `spikes/harness/chain_switch.py`.
+- **A fresh install never guesses the node.** `init/chooseBackend.ts` selects the only supported
+  node if exactly one is installed, and otherwise raises a critical Select Node task. The default
+  cannot be right by id: Retropex's BLAKE2b package takes `bitcoind`, so the same default is SHA256
+  on one server and BLAKE2b on another.
+- **"Waiting for <node> to start" is not a fault.** The daemon waits for the node's cookie, which
+  the node deletes whenever it stops. The "Electrum Server" ready check reports that wait, since
+  StartOS does not run "Sync Progress" until that check passes; Sync Progress says it too if the
+  node vanishes mid-run. Keep "waiting for the node" and "electrs exited" apart: the old shared
+  message is what got a healthy setup reported as unstable.
+- **Do not use the SDK's `checkPortListening`.** It matches any socket on the port in any state,
+  so an electrs that just exited still looks listening for about a minute through the TIME_WAIT
+  connections it left. Confirmed against the SDK's own `containsAddress`. `listening.ts` checks for
+  state `0A`. Found on the test server, not by reading. The fix is proposed upstream as
+  [Start9Labs/start-technologies#4091](https://github.com/Start9Labs/start-technologies/pull/4091);
+  retire `listening.ts` only once it ships in the SDK version this package pins.
 - **This package can index a BLAKE2b chain.** Patches `0004`-`0006` carry the header-v2 support:
   164-byte headers, BLAKE2b block identity, and a replacement for `bsl::Block::visit`, which reads
   the transaction count from a hardcoded offset 80 and silently indexes a v2 block as empty. Pick

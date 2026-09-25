@@ -7,6 +7,7 @@ import { storeJson } from './fileModels/store.json'
 import { i18n } from './i18n'
 import { sdk } from './sdk'
 import { bitcoindBridge, port } from './utils'
+import { isListening } from './listening'
 
 export const main = sdk.setupMain(async ({ effects }) => {
   /**
@@ -96,33 +97,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
   const rootfs = await electrsContainer.rootfs
 
-  // Discard the index if it was built against a different flavor.
-  //
-  // The two Knots flavors share history only to the RDTS split, and mainnet and
-  // a testnet share none at all, so an index built against one does not
-  // describe the other. electrs would cope with the first case by reorganising,
-  // but a reorg thousands of blocks deep on a large index is slow and rarely
-  // exercised, and the second case is not well defined. Rebuilding is slower and
-  // always correct.
-  //
-  // Done here rather than in the action so an interrupted action cannot leave a
-  // half-deleted index, and so a backup restored onto a different selection is
-  // caught too. electrs's db_dir defaults to ./db and the image's WORKDIR is
-  // /data, which is where the main volume mounts.
-  const indexedBackend = await storeJson.read((s) => s.indexedBackend).once()
-  if (indexedBackend !== undefined && indexedBackend !== backend) {
-    console.warn(
-      `Bitcoin service changed from ${indexedBackend} to ${backend}. Discarding the address index; it describes a different chain and will be rebuilt.`,
-    )
-    await rm(`${rootfs}/data/db`, { recursive: true, force: true })
-    await storeJson.merge(effects, { syncNotified: false, everSynced: false })
-    syncNotified = false
-    everSynced = false
-  }
-  if (indexedBackend !== backend) {
-    await storeJson.merge(effects, { indexedBackend: backend })
-  }
-
   /**
    * Which chain the backend is on, read from its own generated config.
    *
@@ -152,6 +126,16 @@ export const main = sdk.setupMain(async ({ effects }) => {
       (prev, next) => next === null || prev === next,
     )
     .const(effects)
+
+  // Every network electrs can be configured for, spelled as electrs names its database
+  // directory for each (`config.rs`, `db_subdir`) -- which is also how `network` is written below.
+  const electrsNetworks = [
+    'bitcoin',
+    'testnet',
+    'testnet4',
+    'regtest',
+    'signet',
+  ] as const
 
   const chain =
     (['regtest', 'testnet4', 'testnet', 'signet'] as const).find((c) =>
@@ -196,6 +180,52 @@ export const main = sdk.setupMain(async ({ effects }) => {
     }),
   })
 
+  const currentNetwork = chain ?? 'bitcoin'
+
+  // Keep the index when the Bitcoin service changes; only an index for another network goes.
+  //
+  // This used to delete the whole index on any change of service, on the grounds that the two
+  // Knots flavors share history only to the fork. True, and it was also the wrong trade: the
+  // shared part is nearly the entire index. One user who moved from the SHA256 node to the
+  // BLAKE2b one waited 36 hours to rebuild all 973,000 blocks, when only the ~12,000 since the
+  // fork needed indexing; the same switch on a test server now takes about two minutes.
+  //
+  // electrs now checks its index against the node before it serves anything and trims back to
+  // the last block the two agree on (patch 0016), so keeping the index cannot serve one chain's
+  // history as the other's. That check is what makes this safe; without it, a node that had
+  // rejected the indexed tip would leave electrs advertising it and hanging on the first query
+  // that needed one of its blocks.
+  //
+  // What still goes is an index for a different *network*. electrs keeps one database
+  // directory per network, named exactly as it is configured below, and a mainnet index moved
+  // onto a testnet node shares nothing but a lot of disk -- on a machine that is pruned
+  // precisely to save it. Deleting those is what the old wipe did for that case, so it stays.
+  //
+  // Done here rather than in the action so an interrupted action cannot leave a half-deleted
+  // index, and so a backup restored onto a different selection is caught too.
+  const indexedBackend = await storeJson.read((s) => s.indexedBackend).once()
+  const indexedNetwork = await storeJson.read((s) => s.indexedNetwork).once()
+  if (indexedBackend !== undefined && indexedBackend !== backend) {
+    console.warn(
+      indexedNetwork === undefined || indexedNetwork === currentNetwork
+        ? `Bitcoin service changed from ${indexedBackend} to ${backend}. Keeping the address index; electrs re-indexes from the last block the two agree on.`
+        : `Bitcoin service changed from ${indexedBackend} to ${backend}, which is on ${currentNetwork} rather than ${indexedNetwork}. The ${indexedNetwork} index is discarded; this network starts from nothing.`,
+    )
+    for (const network of electrsNetworks) {
+      if (network !== currentNetwork) {
+        await rm(`${rootfs}/data/db/${network}`, { recursive: true, force: true })
+      }
+    }
+    // A fresh "Sync Complete" once it has caught up on the new chain. `everSynced` stays: the
+    // index is built, and the catch-up wording ("busy indexing, at block X of Y") is the true one
+    // for re-indexing the blocks since a fork, where the first-build wording would promise hours.
+    await storeJson.merge(effects, { syncNotified: false })
+    syncNotified = false
+  }
+  if (indexedBackend !== backend) {
+    await storeJson.merge(effects, { indexedBackend: backend })
+  }
+
   // A backend can change chain without changing its id, and the check above
   // compares ids only. `knots-blake2b` did exactly that when it moved from
   // testnet4 to mainnet: same package, different chain.
@@ -206,8 +236,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
   // had finished: left standing, the health check describes a first-time
   // build as a resync, and the notification for the new chain never fires
   // because it already fired for the old one.
-  const indexedNetwork = await storeJson.read((s) => s.indexedNetwork).once()
-  const currentNetwork = chain ?? 'bitcoin'
   if (indexedNetwork !== undefined && indexedNetwork !== currentNetwork) {
     console.warn(
       `Chain changed from ${indexedNetwork} to ${currentNetwork} on the same Bitcoin service. electrs indexes each chain separately, so this one starts from nothing.`,
@@ -329,6 +357,28 @@ printf '%s %s' "\${IDX:-}" "\${TGT:-}"`
     }
   }
 
+  /**
+   * Whether the node's RPC cookie is there, i.e. whether the node is up.
+   *
+   * The daemon below holds electrs back until this is true, and the node deletes its cookie
+   * whenever it stops, so while it is false electrs is not running *on purpose*. Both health
+   * checks ask it before saying anything about electrs, so a restart of the node reads as
+   * waiting for the node rather than as a crash. The same bash test the daemon's loop makes, so
+   * the two cannot disagree. If the exec itself fails, report the node as up and let the caller
+   * say what it would have said anyway.
+   */
+  const nodeCookiePresent = () =>
+    electrsContainer
+      .exec(['bash', '-c', `[ -r ${JSON.stringify(cookiePath)} ]`], {})
+      .then((r) => r.exitCode === 0)
+      .catch(() => true)
+
+  const waitingForNode = () =>
+    i18n(
+      'Waiting for ${node} to start. Electrs starts as soon as the node is up; if it is already running and this persists, check the logs.',
+      { node: backends[backend].title },
+    )
+
   return sdk.Daemons.of(effects)
     .addDaemon('electrs', {
       subcontainer: electrsContainer,
@@ -363,29 +413,32 @@ exec electrs`,
       ready: {
         display: i18n('Electrum Server'),
         fn: async () => {
-          // checkPortListening reads /proc/net/tcp* — it succeeds as soon as
-          // electrs binds the Electrum port, which it does at startup BEFORE
+          // A LISTEN socket on the Electrum port appears as soon as electrs
+          // binds it, which it does at startup BEFORE
           // blocking on the bitcoind IBD wait (electrs/src/server.rs binds the
           // listener before Rpc::new connects to bitcoind). So the port is open
           // throughout that wait; a not-listening result just means electrs hasn't
           // bound the socket yet — it's still starting, not blocked on bitcoind.
-          const result = await sdk.healthCheck.checkPortListening(
-            effects,
-            port,
-            {
-              successMessage: i18n(
+          //
+          // `isListening` rather than the SDK's `checkPortListening`, which counts any socket on
+          // the port in any state: the TIME_WAIT connections left by an electrs that just exited
+          // made this report ready while electrs was still waiting for the node. See listening.ts.
+          if (await isListening(port)) {
+            return {
+              result: 'success',
+              message: i18n(
                 'Electrum server is ready and accepting connections',
               ),
-              errorMessage: i18n('Electrum server is starting'),
-            },
-          )
-
-          return result.result === 'success'
-            ? result
-            : {
-                result: 'starting',
-                message: i18n('Electrum server is starting'),
-              }
+            }
+          }
+          // Not ready yet. While the node is down this is the line the operator sees -- the
+          // Sync check does not run until this one passes -- so it is the one that has to say so.
+          return {
+            result: 'starting',
+            message: (await nodeCookiePresent())
+              ? i18n('Electrum server is starting')
+              : waitingForNode(),
+          }
         },
       },
       requires: [],
@@ -431,30 +484,32 @@ printf '%s' "$line"`
             }
           }
 
-          // Before guessing at a cause, find out whether electrs is even running.
+          // Before guessing at a cause, find out why electrs did not answer. Three reasons, and
+          // they call for three different responses, so each gets its own message.
           //
-          // Every failure of the probe above used to be reported as indexing. That
-          // is the right guess while an index is building and the wrong one when the
-          // process has exited: a crash loop on a missing bitcoind cookie reported
-          // "likely busy indexing; this usually clears on its own" for as long as it
-          // lasted, which is advice to wait for something that had already died. The
-          // two are worth telling apart because the remedies are opposites, one being
-          // to wait and the other to look at the logs.
-          //
-          // Read off the port rather than the process table: electrs binds the
-          // listener before it does anything else, so an unbound port means it is not
-          // up, while a bound one that will not answer is the busy case the message
-          // below describes.
-          const listening = await sdk.healthCheck
-            .checkPortListening(effects, port, {
-              successMessage: i18n(
-                'Electrum server is ready and accepting connections',
-              ),
-              errorMessage: i18n('Electrum server is starting'),
-            })
-            .catch(() => null)
+          // First, the node. The daemon holds electrs back until the node's cookie exists, and the
+          // node deletes its cookie whenever it stops, so every restart of the node spends a while
+          // with electrs not running at all. This used to read "exited and is being restarted;
+          // check the logs", and in one user's log all ten times it said so were that wait during
+          // a Knots restart: it is how a working setup came to be reported as unstable. Asked
+          // first and on its own, because it must not depend on a port reading -- see below.
+          // This check only runs once the daemon's ready check has passed, so in practice the
+          // daemon's line is what says this during an outage; this covers the node going away
+          // while the check is already running.
+          if (!(await nodeCookiePresent())) {
+            return { message: waitingForNode(), result: 'loading' }
+          }
 
-          if (listening?.result !== 'success') {
+          // Then whether electrs is running. Every failure of the probe used to be reported as
+          // indexing, which is the right guess during a build and the wrong one after a crash:
+          // a crash loop on a missing cookie once reported "likely busy indexing" for as long as
+          // it lasted. electrs binds its listener before anything else, so no listener means it
+          // is not up, and a listener that will not answer is the busy case below.
+          //
+          // A real LISTEN check, not the SDK's `checkPortListening`: that one counts the
+          // TIME_WAIT connections an exited electrs leaves behind, and on a live server it said
+          // "busy indexing" 34 seconds after electrs had died. See listening.ts.
+          if (!(await isListening(port))) {
             return {
               message: i18n(
                 'Electrs is not running. It exited and is being restarted; if this persists, check the logs.',

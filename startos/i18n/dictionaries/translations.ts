@@ -49,6 +49,9 @@ export default {
     // which is not a thing to hand to a translation engine.
     46: 'A second node on the same chain as your main Bitcoin service, installed alongside it. It never enforces BIP-110, so if the network splits over that rule this one follows the side that does not require it.',
     47: 'Seleccionar nodo',
+    48: 'Electrs conserva su índice de direcciones y vuelve a indexar solo desde el último bloque en el que coinciden ambos servicios. Entre los nodos SHA256 y BLAKE2b ese punto es la bifurcación, así que es una pequeña parte de una reconstrucción completa, aunque puede tardar un tiempo si el nuevo nodo ya ha podado esos bloques. Un servicio en otra red, como una testnet, empieza desde cero.',
+    49: 'Elija qué nodo de Bitcoin debe indexar Electrs. Determina qué cadena ven sus billeteras, así que no se elige automáticamente.',
+    50: 'Esperando a que se inicie ${node}. Electrs se inicia en cuanto el nodo esté activo; si ya está en ejecución y esto persiste, consulte los registros.',
   },
   de_DE: {
     0: 'Starte Electrs!',
@@ -98,6 +101,9 @@ export default {
     // which is not a thing to hand to a translation engine.
     46: 'A second node on the same chain as your main Bitcoin service, installed alongside it. It never enforces BIP-110, so if the network splits over that rule this one follows the side that does not require it.',
     47: 'Knoten auswählen',
+    48: 'Electrs behält seinen Adressindex und indiziert nur ab dem letzten Block neu, in dem beide Dienste übereinstimmen. Zwischen den SHA256- und BLAKE2b-Knoten ist das die Abspaltung, daher ist es nur ein kleiner Teil eines vollständigen Neuaufbaus, kann aber dennoch eine Weile dauern, wenn der neue Knoten diese Blöcke bereits entfernt (gepruned) hat. Ein Dienst in einem anderen Netzwerk, etwa einem Testnet, beginnt von vorn.',
+    49: 'Wählen Sie, welchen Bitcoin-Knoten Electrs indizieren soll. Das bestimmt, welche Chain Ihre Wallets sehen, deshalb wird es nicht geraten.',
+    50: 'Warte auf den Start von ${node}. Electrs startet, sobald der Knoten läuft; wenn er bereits läuft und dies anhält, sehen Sie in den Protokollen nach.',
   },
   pl_PL: {
     0: 'Uruchamianie Electrs!',
@@ -147,6 +153,9 @@ export default {
     // which is not a thing to hand to a translation engine.
     46: 'A second node on the same chain as your main Bitcoin service, installed alongside it. It never enforces BIP-110, so if the network splits over that rule this one follows the side that does not require it.',
     47: 'Wybierz węzeł',
+    48: 'Electrs zachowuje swój indeks adresów i indeksuje ponownie tylko od ostatniego bloku, co do którego obie usługi są zgodne. Między węzłami SHA256 i BLAKE2b jest to punkt rozwidlenia, więc to niewielka część pełnej przebudowy, choć może to chwilę potrwać, jeśli nowy węzeł już przyciął te bloki. Usługa w innej sieci, na przykład w sieci testowej, zaczyna od zera.',
+    49: 'Wybierz, który węzeł Bitcoin ma indeksować Electrs. Od tego zależy, który łańcuch widzą Twoje portfele, dlatego nie jest to zgadywane.',
+    50: 'Oczekiwanie na uruchomienie ${node}. Electrs uruchomi się, gdy tylko węzeł będzie działał; jeśli już działa, a to się utrzymuje, sprawdź dzienniki.',
   },
   fr_FR: {
     0: "Démarrage d'Electrs !",
@@ -196,5 +205,8 @@ export default {
     // which is not a thing to hand to a translation engine.
     46: 'A second node on the same chain as your main Bitcoin service, installed alongside it. It never enforces BIP-110, so if the network splits over that rule this one follows the side that does not require it.',
     47: 'Sélectionner le nœud',
+    48: 'Electrs conserve son index d\'adresses et ne réindexe qu\'à partir du dernier bloc sur lequel les deux services s\'accordent. Entre les nœuds SHA256 et BLAKE2b, c\'est le point de bifurcation : ce n\'est donc qu\'une petite partie d\'une reconstruction complète, même si cela peut prendre un certain temps si le nouveau nœud a déjà élagué ces blocs. Un service sur un autre réseau, comme un testnet, repart de zéro.',
+    49: 'Choisissez le nœud Bitcoin qu\'Electrs doit indexer. Il détermine la chaîne que voient vos portefeuilles, il n\'est donc pas deviné.',
+    50: 'En attente du démarrage de ${node}. Electrs démarre dès que le nœud est opérationnel ; s\'il fonctionne déjà et que cela persiste, consultez les journaux.',
   },
 } satisfies Record<string, LangDict>

@@ -23,9 +23,10 @@ An archival node still works normally. Nothing changes for you if you are not pr
 ## Getting set up
 
 1. Install **Bitcoin** first if it isn't already installed. Pruning may be on or off; both work.
-2. Start Electrs Pruned. On first run it will report **Electrum server is starting** until it has bound its port, and it will not begin indexing until your Bitcoin node has completed its initial block download.
-3. Once Bitcoin is fully synced, it will switch to **building its address index**, and **Sync Progress** will show how far it has got: a percentage, and the block it has reached out of your node's height. Those figures keep moving during the build, so you can tell progress from a stall without reading the logs.
-4. When the **Sync Progress** health check reports **Fully synced**, point your wallet at the **Electrum (SSL)** interface — copy the address from the **Interfaces** page rather than typing a port from memory.
+2. If you have more than one Bitcoin node installed, for example both the SHA256 and the BLAKE2b companion, Electrs Pruned asks which one to index before it will start. Pick the one whose chain your wallet uses. With only one node installed it is selected for you.
+3. Start Electrs Pruned. On first run it will report **Electrum server is starting** until it has bound its port, and it will not begin indexing until your Bitcoin node has completed its initial block download.
+4. Once Bitcoin is fully synced, it will switch to **building its address index**, and **Sync Progress** will show how far it has got: a percentage, and the block it has reached out of your node's height. Those figures keep moving during the build, so you can tell progress from a stall without reading the logs.
+5. When the **Sync Progress** health check reports **Fully synced**, point your wallet at the **Electrum (SSL)** interface — copy the address from the **Interfaces** page rather than typing a port from memory.
 
 ## How long the first index takes
 
@@ -37,6 +38,8 @@ This depends enormously on **when** you install it, and the difference is hours 
 Either way it happens once, and it survives restarts — if it is interrupted it resumes where it left off rather than starting over. But if you are setting up a new node and know you will want an Electrum server, install this one early.
 
 Once that first **Fully synced** appears, the index is built and is never rebuilt. If **Sync Progress** later reports that Electrs is not responding and is likely busy, that is a busy moment and it clears by itself, normally within a minute or two. Two things cause it: Electrs answers wallet queries only between indexing batches, and a wallet loading history from below the prune point holds it for the length of that lookup, which can be up to a minute. Neither means the index is being rebuilt, and neither is a reason to reindex.
+
+If Electrs says it is **waiting for your Bitcoin node to start**, your node is restarting, usually after an update. Electrs starts again by itself as soon as the node is back, and picks up where it left off.
 
 ## What running against a pruned node costs you
 
@@ -82,4 +85,5 @@ Once connected, Electrs serves all standard Electrum protocol queries: balances,
 
 ### Actions
 
+- **Select Node**: choose which installed Bitcoin node to index. Switching keeps the index and only redoes the blocks after the point where the two nodes' chains split, so moving between the SHA256 and BLAKE2b nodes takes a small fraction of a first index. Your wallets will then see the chain of the node you picked.
 - **Configure** — adjust the log verbosity and two indexer tuning knobs (batch size and per-address lookup limit). Defaults are sensible; only touch these if you have a specific reason.

@@ -1,7 +1,7 @@
 From 92f65750e6503683a7462f6ef1d62bdd33fd16c2 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Mon, 21 Sep 2026 13:42:19 -0500
-Subject: [PATCH 13/15] daemon: fetch pruned blocks through a sliding window
+Subject: [PATCH 13/16] daemon: fetch pruned blocks through a sliding window
 
 Every block on this path is one the local node has discarded, so each is a round
 trip to the archival helper or, failing that, a peer fetch through the proxy costing

@@ -1,7 +1,7 @@
 From af6e5cba3b363bc6fba5f9c7d967e11d283529ab Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Mon, 21 Sep 2026 13:42:19 -0500
-Subject: [PATCH 14/15] server: answer a batch of clients together
+Subject: [PATCH 14/16] server: answer a batch of clients together
 
 `handle_events` walked the batch one client after another, so the batch cost the sum
 of its clients. On a pruned node a single request can reach for a block the node has
