@@ -59,6 +59,7 @@ export default {
     55: 'Electrs y todos los servicios que lo usan no estarán disponibles hasta que se reconstruya el índice, lo que tarda lo mismo que un primer índice: horas si Bitcoin todavía tiene los bloques, y un día o más si Bitcoin los ha podado y hay que volver a obtenerlos de la red. Si los registros muestran errores de entrada/salida, revisa primero tu disco: una reconstrucción en un disco que falla fallará de la misma manera.',
     56: 'Electrs se está reiniciando. Elimina su índice y lo construye de nuevo a partir de Bitcoin, lo que tarda lo mismo que un primer índice.',
     57: 'Electrs eliminará su índice y lo construirá de nuevo a partir de Bitcoin la próxima vez que se inicie.',
+    58: 'Electrs se está poniendo al día: bloque ${indexed} de ${total} (${percent}%).',
   },
   de_DE: {
     0: 'Starte Electrs!',
@@ -118,6 +119,7 @@ export default {
     55: 'Electrs und alle Dienste, die es verwenden, sind nicht verfügbar, bis der Index neu aufgebaut ist. Das dauert so lange wie ein erster Index: Stunden, wenn Bitcoin die Blöcke noch hat, und einen Tag oder länger, wenn Bitcoin sie gepruned hat und sie erneut aus dem Netzwerk geladen werden müssen. Wenn die Protokolle Ein-/Ausgabefehler zeigen, prüfen Sie zuerst Ihr Laufwerk: Ein Neuaufbau auf einem defekten Laufwerk scheitert auf die gleiche Weise.',
     56: 'Electrs wird neu gestartet. Es löscht seinen Index und baut ihn aus Bitcoin neu auf, was so lange dauert wie ein erster Index.',
     57: 'Electrs löscht seinen Index beim nächsten Start und baut ihn aus Bitcoin neu auf.',
+    58: 'Electrs holt auf: Block ${indexed} von ${total} (${percent}%).',
   },
   pl_PL: {
     0: 'Uruchamianie Electrs!',
@@ -177,6 +179,7 @@ export default {
     55: 'Electrs i wszystkie usługi, które z niego korzystają, będą niedostępne do czasu odbudowy indeksu, która trwa tyle co pierwsze indeksowanie: kilka godzin, jeśli Bitcoin nadal ma bloki, i dzień lub dłużej, jeśli Bitcoin je przyciął i trzeba je ponownie pobrać z sieci. Jeśli logi pokazują błędy wejścia/wyjścia, najpierw sprawdź dysk: odbudowa na uszkodzonym dysku zakończy się tak samo.',
     56: 'Electrs uruchamia się ponownie. Usuwa swój indeks i buduje go od nowa z danych Bitcoina, co trwa tyle co pierwsze indeksowanie.',
     57: 'Electrs usunie swój indeks i zbuduje go od nowa z danych Bitcoina przy następnym uruchomieniu.',
+    58: 'Electrs nadrabia zaległości: blok ${indexed} z ${total} (${percent}%).',
   },
   fr_FR: {
     0: "Démarrage d'Electrs !",
@@ -236,5 +239,6 @@ export default {
     55: "Electrs et tous les services qui l'utilisent sont indisponibles jusqu'à la reconstruction de l'index, qui prend autant de temps qu'un premier index : des heures si Bitcoin possède encore les blocs, et un jour ou plus si Bitcoin les a élagués et qu'il faut les récupérer à nouveau sur le réseau. Si les journaux affichent des erreurs d'entrée/sortie, vérifiez d'abord votre disque : une reconstruction sur un disque défaillant échouera de la même façon.",
     56: "Electrs redémarre. Il supprime son index et le reconstruit à partir de Bitcoin, ce qui prend autant de temps qu'un premier index.",
     57: 'Electrs supprimera son index et le reconstruira à partir de Bitcoin au prochain démarrage.',
+    58: 'Electrs rattrape son retard : bloc ${indexed} sur ${total} (${percent} %).',
   },
 } satisfies Record<string, LangDict>

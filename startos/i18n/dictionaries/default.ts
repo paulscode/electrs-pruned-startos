@@ -55,6 +55,7 @@ const dict = {
   'Electrs and every service that uses it are unavailable until the index is rebuilt, which takes as long as a first index: hours if Bitcoin still holds the blocks, and a day or more if Bitcoin has pruned them and they have to be fetched from the network again. If the logs show input/output errors, check your drive first: a rebuild on a failing drive fails the same way.': 55,
   'Electrs is restarting. It deletes its index and builds it again from Bitcoin, which takes as long as a first index.': 56,
   'Electrs deletes its index and builds it again from Bitcoin the next time it starts.': 57,
+  'Electrs is catching up: block ${indexed} of ${total} (${percent}%).': 58,
 } as const
 
 /**

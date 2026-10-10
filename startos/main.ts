@@ -338,10 +338,11 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
   const group = (n: number) => n.toLocaleString(groupLocale)
 
+  // `params` holds strings only, because it is handed to i18n, and SDK 2.0.9's i18n throws a
+  // RangeError on a number parameter. `behind` is the number, kept beside it.
   const readProgress = async (): Promise<{
-    indexed: string
-    total: string
-    percent: string
+    params: { indexed: string; total: string; percent: string }
+    behind: number
   } | null> => {
     const probe = `IDX=$(curl -s --max-time 5 http://127.0.0.1:4224/metrics 2>/dev/null \
 | awk '$1 == "electrs_index_height{type=\\"tip\\"}" { print $2 }' | tail -1)
@@ -374,9 +375,12 @@ printf '%s %s' "\${IDX:-}" "\${TGT:-}"`
     // read as a fault rather than as the one-block race they are.
     const total_ = Math.round(total)
     return {
-      indexed: group(Math.min(Math.round(indexed), total_)),
-      total: group(total_),
-      percent: Math.min(100, (indexed / total) * 100).toFixed(1),
+      params: {
+        indexed: group(Math.min(Math.round(indexed), total_)),
+        total: group(total_),
+        percent: Math.min(100, (indexed / total) * 100).toFixed(1),
+      },
+      behind: Math.max(0, total_ - Math.round(indexed)),
     }
   }
 
@@ -499,6 +503,24 @@ printf '%s' "$line"`
               res.exitCode === 0 &&
               res.stdout.toString().includes('"result"')
             ) {
+              // An answer is not the same as caught up. Once an index has been built, electrs
+              // answers between indexing batches, so after Select Node moves it to a node with
+              // blocks it has not indexed, server.banner succeeds while it is still working
+              // through them, and this used to say "Fully synced" and fire Sync Complete with
+              // thousands of blocks to go. Upstream made the same correction. One block behind is
+              // allowed: the node and the index are read a moment apart, and a block found in
+              // between is not a sync in progress. No reading at all counts as caught up, as an
+              // answer always did before.
+              const progress = await readProgress()
+              if (progress && progress.behind > 1) {
+                return {
+                  message: i18n(
+                    'Electrs is catching up: block ${indexed} of ${total} (${percent}%).',
+                    progress.params,
+                  ),
+                  result: 'loading',
+                }
+              }
               if (!everSynced) {
                 await storeJson.merge(effects, { everSynced: true })
                 everSynced = true
@@ -554,7 +576,7 @@ printf '%s' "$line"`
               ? progress
                 ? i18n(
                     'Electrs is not responding. It is likely busy indexing, at block ${indexed} of ${total} (${percent}%). This usually clears on its own.',
-                    progress,
+                    progress.params,
                   )
                 : i18n(
                     'Electrs is not responding. It is likely busy indexing; this usually clears on its own.',
@@ -562,7 +584,7 @@ printf '%s' "$line"`
               : progress
                 ? i18n(
                     'Electrs is building its address index: ${percent}%, block ${indexed} of ${total}. This can take several hours on first run.',
-                    progress,
+                    progress.params,
                   )
                 : i18n(
                     'Electrs is building its address index. This can take several hours on first run.',
