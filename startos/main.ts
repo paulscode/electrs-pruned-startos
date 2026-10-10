@@ -271,6 +271,22 @@ export const main = sdk.setupMain(async ({ effects }) => {
     await rm(reindexRequest, { force: true })
   }
 
+  // No index on disk, but flags that say one was built. A restore does exactly this:
+  // backups exclude /db, so the index is rebuilt from nothing while store.json comes
+  // back with everSynced and syncNotified set, and the rebuild would read as "busy"
+  // with no Sync Complete at the end. An index deleted by hand is the same case.
+  if (
+    (everSynced || syncNotified) &&
+    !existsSync(sdk.volumes.main.subpath(`db/${currentNetwork}`))
+  ) {
+    console.warn(
+      `No ${currentNetwork} index on disk; electrs builds it from the first block.`,
+    )
+    await storeJson.merge(effects, { everSynced: false, syncNotified: false })
+    everSynced = false
+    syncNotified = false
+  }
+
   // Restart only when the backend writes a replacement cookie; an absent cookie
   // means it is down.
   await FileHelper.string(

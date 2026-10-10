@@ -184,6 +184,8 @@ Deletes the address index so electrs builds it again from Bitcoin: the in-place 
 - **Repeat safety:** a second run before the next start changes nothing; a run after the rebuild has started starts it over.
 - **What happens next:** if electrs is stopped, nothing happens until it is started. While it is starting, the action waits up to a minute for the start to complete and then restarts it, because a single restart requested mid-start is dropped.
 
+The same reset happens without the action whenever `main` finds no `db/<network>` but `everSynced` or `syncNotified` set. A restore is the usual cause: backups exclude `/db`, so the index is rebuilt while `store.json` comes back saying it was built, and without the reset the rebuild would read as busy and never send Sync Complete. An index deleted by hand is the same case.
+
 ## Tasks
 
 **One, at install only:** a `critical` task to run **Select Node**, raised when the choice of node is not obvious, meaning several supported services are installed or none yet. It keeps the service stopped until answered. With exactly one installed, that one is selected and no task is raised. Updates and restores keep the choice already made.

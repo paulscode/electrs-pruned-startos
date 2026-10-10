@@ -16,6 +16,11 @@ const notes =
   'block ahead of the index, for example while the node catches up after being ' +
   'offline. It shows the block Electrs has reached until it is within one block. ' +
   ' ' +
+  'After a restore from backup, the index rebuild is now reported as a first ' +
+  'build, and Sync Complete is sent when it finishes. Backups do not include ' +
+  'the index, so a restore always rebuilds it, but it used to be reported as a ' +
+  'busy server with no notification at the end. ' +
+  ' ' +
   'Two fixes from upstream electrs 0.12.0 for wallets that follow the Electrum ' +
   'protocol strictly: the server features reply now lists its host the way the ' +
   'protocol specifies, and looking up a transaction by block position works ' +
