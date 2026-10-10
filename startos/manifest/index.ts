@@ -20,6 +20,13 @@ export const manifest = setupManifest({
         },
       },
       arch: ['x86_64', 'aarch64'],
+      // Never run this image under emulation. Left unset, SDK 2.0.9's
+      // buildManifest defaults it to 'x86_64' and then drops the architecture
+      // requirement, so the package would offer itself to a riscv64 server and
+      // run an x86_64 indexer there under emulation, which nobody has tested.
+      // null keeps hardwareRequirements.arch at the two built above. Upstream's
+      // SDK 3 spelling is `emulateMissing: false`.
+      emulateMissingAs: null,
     },
   },
   // All four are optional here and exactly one is returned as required from

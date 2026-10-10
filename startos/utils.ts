@@ -9,6 +9,13 @@ export const port = 50001
 // (mempool/specter/canary) resolve electrs over the bridge without a literal.
 export const electrumHostId = 'electrum'
 
+/**
+ * Left by the Reindex action, consumed by `main`: an empty file at the volume root, the same marker
+ * upstream uses. `main` removes it only after the index is gone, so an interrupted delete is
+ * repeated on the next start.
+ */
+export const reindexRequest = sdk.volumes.main.subpath('reindex.request')
+
 export const logFilters = {
   ERROR: i18n('Error'),
   WARN: i18n('Warning'),

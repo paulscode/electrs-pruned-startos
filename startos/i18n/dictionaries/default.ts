@@ -48,6 +48,13 @@ const dict = {
   'Electrs keeps its address index and indexes again only from the last block the two services agree on. Between the SHA256 and BLAKE2b nodes that is the fork, so this is a small part of a full rebuild, though it can still take a while if the new node has already pruned those blocks. A service on a different network, such as a testnet, starts from scratch.': 48,
   'Choose which Bitcoin node Electrs should index. It decides which chain your wallets see, so it is not guessed.': 49,
   'Waiting for ${node} to start. Electrs starts as soon as the node is up; if it is already running and this persists, check the logs.': 50,
+  'How much Electrs writes to its logs. Each level includes everything in the levels above it.\n- Error: failures only\n- Warning: also conditions that may need attention\n- Info: also startup and sync progress\n- Debug: also every wallet connection, request and reply; noisy, for chasing a specific problem\n- Trace: everything Electrs can log; very noisy': 51,
+  'Set how much Electrs writes to its logs, and two limits on indexing and on history lookups.': 52,
+  Reindex: 53,
+  'Delete the address index and build it again from Bitcoin. Use this only if the index is corrupted: Electrs keeps crashing and its logs show a database error such as "Corruption". A slow or busy index is not a reason to reindex, and neither is switching node, since Select Node keeps the index.': 54,
+  'Electrs and every service that uses it are unavailable until the index is rebuilt, which takes as long as a first index: hours if Bitcoin still holds the blocks, and a day or more if Bitcoin has pruned them and they have to be fetched from the network again. If the logs show input/output errors, check your drive first: a rebuild on a failing drive fails the same way.': 55,
+  'Electrs is restarting. It deletes its index and builds it again from Bitcoin, which takes as long as a first index.': 56,
+  'Electrs deletes its index and builds it again from Bitcoin the next time it starts.': 57,
 } as const
 
 /**

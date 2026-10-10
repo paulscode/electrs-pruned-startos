@@ -1,4 +1,5 @@
 import { FileHelper } from '@start9labs/start-sdk'
+import { existsSync } from 'fs'
 import { rm } from 'fs/promises'
 import { manifest } from 'bitcoin-core-startos/startos/manifest'
 import { backends, defaultBackend, backendIds } from './backends'
@@ -6,7 +7,7 @@ import { tomlFile } from './fileModels/electrs.toml'
 import { storeJson } from './fileModels/store.json'
 import { i18n } from './i18n'
 import { sdk } from './sdk'
-import { bitcoindBridge, port } from './utils'
+import { bitcoindBridge, port, reindexRequest } from './utils'
 import { isListening } from './listening'
 
 export const main = sdk.setupMain(async ({ effects }) => {
@@ -246,6 +247,28 @@ export const main = sdk.setupMain(async ({ effects }) => {
   }
   if (indexedNetwork !== currentNetwork) {
     await storeJson.merge(effects, { indexedNetwork: currentNetwork })
+  }
+
+  // A Reindex request, left by the action. Only the index for the network electrs is about to
+  // open goes: that is the one it would crash on. `backend`, `indexedBackend` and
+  // `indexedNetwork` stay, because the index is rebuilt against the same node, and clearing them
+  // would make the next start misread the rebuild as a node switch.
+  //
+  // Both flags reset, so the rebuild reports "building its address index" rather than "busy",
+  // and the completion notification fires again. The marker goes last, so a delete interrupted
+  // part way is repeated on the next start rather than leaving half an index behind.
+  if (existsSync(reindexRequest)) {
+    console.warn(
+      `Reindex requested. Deleting the ${currentNetwork} index; electrs builds it again from the first block.`,
+    )
+    await rm(sdk.volumes.main.subpath(`db/${currentNetwork}`), {
+      recursive: true,
+      force: true,
+    })
+    await storeJson.merge(effects, { everSynced: false, syncNotified: false })
+    everSynced = false
+    syncNotified = false
+    await rm(reindexRequest, { force: true })
   }
 
   // Restart only when the backend writes a replacement cookie; an absent cookie

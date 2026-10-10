@@ -75,20 +75,22 @@ One volume, plus a read-only view of Bitcoin's.
 
 **The index is the bulk of the volume and is excluded from backups** — see [Backups and Restore](#backups-and-restore). Everything else on `main` is small.
 
+The index lives at `db/<network>` on `main`, one directory per network, named as electrs names them (`bitcoin`, `testnet4`, ...). A pending Reindex is an empty `reindex.request` file at the volume root; `main` removes it once the index is gone (see [Reindex](#reindex)).
+
 ## File Models
 
 Two models, and most of the config file is pinned rather than configurable.
 
 | File           | Format | Modelled                | Written by                   |
 | -------------- | ------ | ----------------------- | ---------------------------- |
-| `electrs.toml` | TOML   | Yes — `FileHelper.toml` | Init, `main`, and the action |
-| `store.json`   | JSON   | Yes — `FileHelper.json` | `main`                       |
+| `electrs.toml` | TOML   | Yes — `FileHelper.toml` | Init, `main`, and the Configure action |
+| `store.json`   | JSON   | Yes — `FileHelper.json` | Init, `main`, and the Select Node action |
 
 Its fields fall into three groups:
 
 - **Pinned.** The cookie path, the network, and the Electrum bind address are `z.literal(...).catch(...)`, so a changed value is **repaired on read** rather than merely overwritten. The auth field is pinned to _undefined_ for a specific reason: electrs exits outright if both an auth value and a cookie file are set.
 - **Resolved at start.** The Bitcoin RPC and P2P addresses are written by `main` from the live bridge addresses. **When Bitcoin is absent they are omitted rather than defaulted**, so electrs fails visibly and the reactive read heals it in with one restart when Bitcoin appears.
-- **User-owned via the action.** The log level and the two indexing limits.
+- **User-owned via the Configure action.** The log level and the two indexing limits.
 
 Every other upstream option — the database directory, the block-download wait, the RPC timeout, the server banner — is fixed or not exposed.
 
@@ -151,7 +153,7 @@ A notification is sent when the index first completes, so the wait does not have
 
 ## Actions
 
-Two actions.
+Three actions: which node to index, the settings, and the recovery for a corrupted index.
 
 ### Select Node
 
@@ -171,6 +173,16 @@ Sets the log level and two indexing limits.
 - **Cost:** applies on restart.
 - **Repeat safety:** idempotent.
 - **The indexing limits are the ones with consequences:** the batch size trades memory against indexing speed, and the lookup limit bounds how much work a single history query may do. Neither needs changing for normal use.
+
+### Reindex
+
+Deletes the address index so electrs builds it again from Bitcoin: the in-place replacement for uninstalling and reinstalling. Ported from upstream electrs-startos, where it arrived with electrs 0.12; electrs 0.11 has no way to repair its own index either.
+
+- **When to run it:** electrs keeps exiting and its log names the database, typically `Corruption` under `failed to open index` / `failed to open DB`, or a panic such as `DB scan failed` or `get_tip failed` once it is running. Not for a busy index (see [Health Checks](#health-checks)), not for waiting on the node, and not for a node switch: Select Node keeps the index and electrs trims it back to the node itself. Input/output errors point at the drive, and a rebuild on failing storage fails the same way.
+- **What it changes:** creates an empty `reindex.request` at the volume root and restarts electrs if it is running. On the next start, once the network is known and before electrs runs, `main` deletes `db/<network>` for the network electrs is about to open, resets `everSynced` and `syncNotified` so the rebuild is reported and notified as a first build, and removes the marker last, so an interrupted delete repeats. `backend`, `indexedBackend` and `indexedNetwork` are kept: the rebuild is against the same node, and clearing them would make the next start read it as a node switch.
+- **Cost:** a full first index. Hours if Bitcoin still holds the blocks; on a long-pruned node every block below the prune point comes from peers again, which is a day or more (see [Limitations](#limitations-and-differences), item 3). Dependents have no complete index meanwhile. No extra disk is needed, since the old index is deleted before the new one grows.
+- **Repeat safety:** a second run before the next start changes nothing; a run after the rebuild has started starts it over.
+- **What happens next:** if electrs is stopped, nothing happens until it is started. While it is starting, the action waits up to a minute for the start to complete and then restarts it, because a single restart requested mid-start is dropped.
 
 ## Tasks
 
@@ -250,6 +262,7 @@ volumes:
 file_models:
   - electrs.toml
   - store.json # backend, indexedBackend, indexedNetwork, everSynced, syncNotified
+  # reindex.request at the volume root: a pending Reindex, consumed by main
 startos_managed_env_vars: [] # configuration is written into electrs.toml
 dependencies:
   - <selected backend> # required, kind: running; checks per backend, see backends.ts
@@ -258,6 +271,7 @@ interfaces:
 actions:
   - select-backend # which node to index; switching keeps the index, re-indexes from the last agreed block
   - config
+  - reindex # deletes db/<network> on the next start; keeps the node selection
 tasks:
   - { action: select-backend, severity: critical } # install only, when several nodes or none are installed
   # deliberately NOT upstream's recurring bitcoind:autoconfig prune task; pruning is supported

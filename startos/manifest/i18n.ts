@@ -1,9 +1,18 @@
+// What electrs takes from the node. Was upstream's "Used to subscribe to new block events",
+// which named the least of it. electrs 0.11 reads headers and blocks over P2P (where new-block
+// notices also arrive), and everything else over RPC, including the blocks below the prune
+// height, which the node's RPC proxy fetches from peers.
 export const bitcoindDescription = {
-  en_US: 'Used to subscribe to new block events.',
-  es_ES: 'Se utiliza para suscribirse a eventos de nuevos bloques.',
-  de_DE: 'Wird verwendet, um neue Block-Ereignisse zu abonnieren.',
-  pl_PL: 'Używany do subskrybowania wydarzeń nowych bloków.',
-  fr_FR: "Utilisé pour s'abonner aux événements de nouveaux blocs.",
+  en_US:
+    'Provides headers and blocks over P2P, and the mempool, fee estimates, transaction broadcast and pruned blocks over RPC.',
+  es_ES:
+    'Proporciona cabeceras y bloques mediante P2P, y el mempool, las estimaciones de comisiones, la difusión de transacciones y los bloques podados mediante RPC.',
+  de_DE:
+    'Stellt Header und Blöcke über P2P sowie Mempool, Gebührenschätzungen, das Senden von Transaktionen und geprunte Blöcke über RPC bereit.',
+  pl_PL:
+    'Udostępnia nagłówki i bloki przez P2P, a mempool, szacunki opłat, rozgłaszanie transakcji i przycięte bloki przez RPC.',
+  fr_FR:
+    'Fournit les en-têtes et les blocs via P2P, ainsi que le mempool, les estimations de frais, la diffusion des transactions et les blocs élagués via RPC.',
 }
 
 export const short = {
