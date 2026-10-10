@@ -12,10 +12,9 @@ const notes =
   'dependency now says what Electrs takes from the node. The package no longer ' +
   'offers to run under emulation on a server architecture it is not built for. ' +
   ' ' +
-  'After Select Node, Sync Progress no longer says Fully synced, and the Sync ' +
-  'Complete notification no longer fires, while Electrs is still indexing the ' +
-  'blocks the new node has that the index does not. It now shows the block it has ' +
-  'reached until it is within one block of the node. ' +
+  'Sync Progress no longer says Fully synced while your node is more than a ' +
+  'block ahead of the index, for example while the node catches up after being ' +
+  'offline. It shows the block Electrs has reached until it is within one block. ' +
   ' ' +
   'Two fixes from upstream electrs 0.12.0 for wallets that follow the Electrum ' +
   'protocol strictly: the server features reply now lists its host the way the ' +

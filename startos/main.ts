@@ -378,7 +378,8 @@ printf '%s %s' "\${IDX:-}" "\${TGT:-}"`
       params: {
         indexed: group(Math.min(Math.round(indexed), total_)),
         total: group(total_),
-        percent: Math.min(100, (indexed / total) * 100).toFixed(1),
+        // Floored, so a few blocks short never reads as 100.0%.
+        percent: (Math.floor(Math.min(100, (indexed / total) * 100) * 10) / 10).toFixed(1),
       },
       behind: Math.max(0, total_ - Math.round(indexed)),
     }
@@ -503,14 +504,15 @@ printf '%s' "$line"`
               res.exitCode === 0 &&
               res.stdout.toString().includes('"result"')
             ) {
-              // An answer is not the same as caught up. Once an index has been built, electrs
-              // answers between indexing batches, so after Select Node moves it to a node with
-              // blocks it has not indexed, server.banner succeeds while it is still working
-              // through them, and this used to say "Fully synced" and fire Sync Complete with
-              // thousands of blocks to go. Upstream made the same correction. One block behind is
-              // allowed: the node and the index are read a moment apart, and a block found in
-              // between is not a sync in progress. No reading at all counts as caught up, as an
-              // answer always did before.
+              // An answer is not the same as caught up. electrs refuses server.banner with
+              // "unavailable index" until a sync pass finds nothing new, and that flag resets on
+              // every restart, so a restart (Select Node included) already reads as busy here.
+              // What it does not reset is the flag going true: once caught up in this process,
+              // electrs keeps answering while the node pulls ahead, for instance a node that is
+              // still syncing, or one catching up after its own downtime, and this used to say
+              // "Fully synced" all through that. Upstream made the same correction. One block
+              // behind is allowed: the node and the index are read a moment apart. No reading at
+              // all counts as caught up, as an answer always did before.
               const progress = await readProgress()
               if (progress && progress.behind > 1) {
                 return {
@@ -566,9 +568,8 @@ printf '%s' "$line"`
           // A built index is never rebuilt, so past the first success the
           // build message would promise a fully-synced user hours of work
           // that is not happening — and send them to reindex a good index.
-          // Asked only once the Electrum probe has already failed, which is the
-          // only time there is anything to report. A synced server answers on the
-          // first attempt and never pays for this.
+          // Asked again here, on the failure path, for the progress to report. A
+          // successful probe also reads it once, for the catching-up check above.
           const progress = await readProgress()
 
           return {
