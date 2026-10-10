@@ -1,7 +1,7 @@
 From ffed75656d611a1352e75453ffe90019998b39c2 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Mon, 21 Sep 2026 13:42:19 -0500
-Subject: [PATCH 15/16] daemon: ration time spent retrying, not wall clock
+Subject: [PATCH 15/18] daemon: ration time spent retrying, not wall clock
 
 Three things wrong with the serving allowance, one fix.
 

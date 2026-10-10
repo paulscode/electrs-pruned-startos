@@ -1,7 +1,7 @@
 From c39fce0874f726325a19974a38188b3852d238bb Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Thu, 24 Sep 2026 20:24:46 -0500
-Subject: [PATCH 16/16] index: reconcile the loaded chain with the node before
+Subject: [PATCH 16/18] index: reconcile the loaded chain with the node before
  serving
 
 The Electrum package lets an operator switch between nodes on the two sides of a chain

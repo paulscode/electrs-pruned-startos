@@ -1,7 +1,7 @@
 From 95c9eb347c115c344338bf3f538261c3a1b64a7d Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Mon, 21 Sep 2026 08:13:03 -0500
-Subject: [PATCH 11/16] daemon: make the helper ceiling monotone and read the
+Subject: [PATCH 11/18] daemon: make the helper ceiling monotone and read the
  RPC code
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

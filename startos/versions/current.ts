@@ -12,6 +12,11 @@ const notes =
   'dependency now says what Electrs takes from the node. The package no longer ' +
   'offers to run under emulation on a server architecture it is not built for. ' +
   ' ' +
+  'Two fixes from upstream electrs 0.12.0 for wallets that follow the Electrum ' +
+  'protocol strictly: the server features reply now lists its host the way the ' +
+  'protocol specifies, and looking up a transaction by block position works ' +
+  'without the optional merkle flag. ' +
+  ' ' +
   'Nothing changes for an existing index.'
 
 export const current = VersionInfo.of({

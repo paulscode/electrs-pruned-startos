@@ -25,6 +25,10 @@ what waiting on it costs, and neither is the whole story on its own.
 
 `0016` is what lets the package keep the index when the operator switches node; see its entry.
 
+`0017` and `0018` are upstream's own protocol fixes from electrs 0.12.0, backported. 0.12 itself is
+not an option: it moves indexing to `bindex`, which needs Bitcoin Core 31 and its REST interface, and
+rebuilds the index.
+
 **These files are generated, not edited.** They come from `git format-patch` over the commits in the
 `electrs-pruned` repo's `vendor/electrs`, which is the single source for this fork. Edit there, run the
 regtest harness there, regenerate, and copy the result here.
@@ -322,10 +326,28 @@ reloads the old chain and trims it again.
 
 **Retire when:** upstream reconciles with the node at startup. Not proposed upstream yet.
 
+## 0017 — fix the `server.features` host map
+
+Upstream 414dc90. `hosts` in a `server.features` reply is a dictionary keyed by host name, each value
+holding that host's ports. electrs sent `{"tcp_port": 50001}`, which is not a host map at all, and a
+client that parses the reply strictly refuses the whole thing. Now keyed by the address electrs binds,
+as upstream does. The `blake2b_fork` field this fork adds is unaffected.
+
+**Retire when:** the submodule moves to a release that has it, which is 0.12.0 or later.
+
+## 0018 — accept `transaction.id_from_pos` without `merkle`
+
+Upstream 1222d36. The protocol makes `merkle` optional, defaulting to false, and electrs refused a
+call that left it out. It also answers `merkle: false` with a bare transaction hash, as the protocol
+specifies, where it used to wrap the hash in an object. The block lookup stays on this fork's chain
+rather than 0.12's header iterator.
+
+**Retire when:** as `0017`.
+
 ## What has tests, and what does not
 
 Each patch carries its own, and every patch in the set builds and passes standalone — 50 tests at
-`0012`, 55 at `0013`, 60 at `0014`, 68 at `0015`, 74 at `0016`. The ones worth knowing about:
+`0012`, 55 at `0013`, 60 at `0014`, 68 at `0015`, 74 at `0016`, 75 at `0017`, 77 at `0018`. The ones worth knowing about:
 
 | area | covered by |
 | --- | --- |
@@ -335,6 +357,7 @@ Each patch carries its own, and every patch in the set builds and passes standal
 | retry loop | a transient failure is retried at all, a clean call costs nothing, a spent allowance gives up at once, an interrupt mid-backoff stops the loop |
 | retry allowance | a long *working* run keeps its allowance, retrying is charged across the run, indexing does not carry a charge between calls, the allowance outlasts a stalled fetch |
 | reconcile with the node (`0016`) | the tip fast path costs one call, a switch lands on the last shared block, a node behind the index lands on its tip, genesis-only, every boundary for every tip up to 69, a failed call is an error rather than a disagreement |
+| protocol replies (`0017`, `0018`) | the host map's shape for IPv4 and IPv6 binds and never the flat form; `id_from_pos` with and without `merkle`, malformed arities refused, both accepted by the dispatcher |
 
 Two of those are there specifically because the obvious implementation was wrong and shipped once
 before: *work continues past an item still outstanding* fails against the batch-and-wait fetch, and

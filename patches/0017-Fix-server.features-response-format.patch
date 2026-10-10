@@ -1,0 +1,119 @@
+From f939873e19113f8bf68b425f032dcde906d0b674 Mon Sep 17 00:00:00 2001
+From: Yuki Kishimoto <yukikishimoto@protonmail.com>
+Date: Sun, 12 Apr 2026 14:40:36 +0200
+Subject: [PATCH 17/18] Fix `server.features` response format
+
+The current `server.features` implementation returns an invalid `hosts`
+structure:
+
+```json
+"hosts": {"tcp_port": 50001}
+```
+
+According to the Electrum protocol, `hosts` must be a dictionary keyed by
+hostname, where each value is a dictionary containing optional keys such as
+`tcp_port` and/or `ssl_port`.
+
+This change updates the response to the correct format, i.e.:
+
+```json
+{
+    "genesis_hash": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+    "hosts": {
+        "127.0.0.1": {
+            "tcp_port": 50001
+        },
+    }
+    "protocol_max": "1.4",
+    "protocol_min": "1.4",
+    "pruning": null,
+    "server_version": "electrs/0.10.0",
+    "hash_function": "sha256"
+}
+```
+
+See: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#server-features
+
+Signed-off-by: Yuki Kishimoto <yukikishimoto@protonmail.com>
+
+Backported from upstream 414dc90 (electrs 0.12.0). Kept the blake2b_fork
+field this tree adds, and moved the host map into hosts_entry() so it
+has a test without building an Rpc.
+---
+ src/electrum.rs | 27 ++++++++++++++++++++++++---
+ 1 file changed, 24 insertions(+), 3 deletions(-)
+
+diff --git a/src/electrum.rs b/src/electrum.rs
+index 9d9855a..19700c0 100644
+--- a/src/electrum.rs
++++ b/src/electrum.rs
+@@ -10,6 +10,7 @@ use serde_json::{self, json, Value};
+ use std::collections::{hash_map::Entry, HashMap};
+ use std::fmt;
+ use std::iter::FromIterator;
++use std::net::SocketAddr;
+ use std::str::FromStr;
+ 
+ use crate::{
+@@ -153,7 +154,7 @@ pub struct Rpc {
+     daemon: Daemon,
+     signal: Signal,
+     banner: String,
+-    port: u16,
++    addr: SocketAddr,
+ }
+ 
+ impl Rpc {
+@@ -180,7 +181,7 @@ impl Rpc {
+             daemon,
+             signal,
+             banner: config.server_banner.clone(),
+-            port: config.electrum_rpc_addr.port(),
++            addr: config.electrum_rpc_addr,
+         })
+     }
+ 
+@@ -572,7 +573,7 @@ impl Rpc {
+         let version = self.protocol_version();
+         let mut features = json!({
+             "genesis_hash": chain.get_block_hash(0),
+-            "hosts": { "tcp_port": self.port },
++            "hosts": hosts_entry(&self.addr),
+             "protocol_max": version,
+             "protocol_min": version,
+             "pruning": null,
+@@ -907,6 +908,13 @@ fn tx_from_hex(tx_hex: &str) -> Result<Transaction> {
+     Ok(tx)
+ }
+ 
++/// `server.features` keys `hosts` by host name, one object per host. A bare
++/// `{"tcp_port": N}` is not a host map, and clients that parse it strictly refuse
++/// the whole response.
++fn hosts_entry(addr: &SocketAddr) -> Value {
++    json!({ addr.ip().to_string(): { "tcp_port": addr.port() } })
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -947,4 +955,17 @@ mod tests {
+         assert!(parse_requests(r#"{"id":1,"method":"name","params":[],"unrelated":42}"#).is_ok());
+         assert!(parse_requests(r#" { "id" : 1 , "method" : "name" , "params" : [ ] } "#).is_ok());
+     }
++
++    #[test]
++    fn test_hosts_entry() {
++        let addr: SocketAddr = "0.0.0.0:50001".parse().unwrap();
++        assert_eq!(
++            hosts_entry(&addr),
++            json!({ "0.0.0.0": { "tcp_port": 50001 } })
++        );
++        let addr: SocketAddr = "[::1]:60001".parse().unwrap();
++        assert_eq!(hosts_entry(&addr), json!({ "::1": { "tcp_port": 60001 } }));
++        // Never the old flat shape, which is not a host map
++        assert!(hosts_entry(&addr).get("tcp_port").is_none());
++    }
+ }
+-- 
+2.43.0
+
