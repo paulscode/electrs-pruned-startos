@@ -12,3 +12,12 @@ builds/
 node_modules/
 javascript/
 *.s9pk
+
+# From upstream (d27865a), after the package template: Docker does not read
+# .gitignore, so without these the whole working tree went to the daemon once per
+# arch. No COPY reads any of them. `.git` matches the root only; the electrs
+# submodule's own `.git` file stays, and the build does not read it either.
+.git
+.gitmodules
+ncc-cache
+docker-images
