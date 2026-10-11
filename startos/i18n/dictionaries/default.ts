@@ -13,7 +13,7 @@ const dict = {
   'Maximum number of blocks to request from bitcoind per batch.': 11,
   blocks: 12,
   'Index Lookup Limit': 13,
-  'Number of transactions to lookup before returning an error, to prevent \'too popular\' addresses from causing the RPC server to time out. Enter \'0\' for no limit.': 14,
+  "Number of transactions to lookup before returning an error, to prevent 'too popular' addresses from causing the RPC server to time out. Enter '0' for no limit.": 14,
   transactions: 15,
   Configure: 16,
   'Customize your electrs Electrum server': 17,

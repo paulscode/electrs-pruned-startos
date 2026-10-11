@@ -214,7 +214,10 @@ export const main = sdk.setupMain(async ({ effects }) => {
     )
     for (const network of electrsNetworks) {
       if (network !== currentNetwork) {
-        await rm(`${rootfs}/data/db/${network}`, { recursive: true, force: true })
+        await rm(`${rootfs}/data/db/${network}`, {
+          recursive: true,
+          force: true,
+        })
       }
     }
     // A fresh "Sync Complete" once it has caught up on the new chain. `everSynced` stays: the
@@ -395,7 +398,9 @@ printf '%s %s' "\${IDX:-}" "\${TGT:-}"`
         indexed: group(Math.min(Math.round(indexed), total_)),
         total: group(total_),
         // Floored, so a few blocks short never reads as 100.0%.
-        percent: (Math.floor(Math.min(100, (indexed / total) * 100) * 10) / 10).toFixed(1),
+        percent: (
+          Math.floor(Math.min(100, (indexed / total) * 100) * 10) / 10
+        ).toFixed(1),
       },
       behind: Math.max(0, total_ - Math.round(indexed)),
     }
