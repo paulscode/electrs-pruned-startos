@@ -69,10 +69,8 @@ const officialEndpoints: Endpoints = {
 /**
  * The bitcoind flavors this package can index.
  *
- * All three are declared as optional dependencies in the manifest and exactly
- * one is returned as required from `dependencies.ts`, chosen by the user. The
- * SDK evaluates `setupDependencies` at runtime, so a conditional requirement is
- * a supported shape rather than a trick.
+ * Each is an optional dependency in `dependencies.ts`, enabled only while it is
+ * the one the user chose, so exactly one is required at a time.
  *
  * The official package and its two mainnet forks share host ids, internal ports
  * and volume layout, because the forks change only their host-side

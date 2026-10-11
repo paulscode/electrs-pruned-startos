@@ -1,7 +1,7 @@
 import { FileHelper, z } from '@start9labs/start-sdk'
 import { sdk } from '../sdk'
 
-export const shape = z.object({
+export const shape = z.looseObject({
   // Stripped: electrs exits if auth and cookie_file are both set
   auth: z.undefined().catch(undefined),
   // Where the selected backend writes its RPC cookie. Not a literal, because

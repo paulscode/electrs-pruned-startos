@@ -1,35 +1,11 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 const notes =
-  'A new Reindex action deletes the address index and builds it again, for an ' +
-  'index that is corrupted. Until now the only way out of a corrupted index was ' +
-  'to uninstall and reinstall Electrs. Use it only when Electrs keeps crashing ' +
-  'with a database error such as "Corruption" in its logs: the rebuild takes as ' +
-  'long as a first index, which on a pruned node can be a day or more. Switching ' +
-  'node does not need it, since Select Node keeps the index. ' +
-  ' ' +
-  'The Log Level setting now explains what each level records, and the Bitcoin ' +
-  'dependency now says what Electrs takes from the node. The package no longer ' +
-  'offers to run under emulation on a server architecture it is not built for. ' +
-  ' ' +
-  'Sync Progress no longer says Fully synced while your node is more than a ' +
-  'block ahead of the index, for example while the node catches up after being ' +
-  'offline. It shows the block Electrs has reached until it is within one block. ' +
-  ' ' +
-  'After a restore from backup, the index rebuild is now reported as a first ' +
-  'build, and Sync Complete is sent when it finishes. Backups do not include ' +
-  'the index, so a restore always rebuilds it, but it used to be reported as a ' +
-  'busy server with no notification at the end. ' +
-  ' ' +
-  'Two fixes from upstream electrs 0.12.0 for wallets that follow the Electrum ' +
-  'protocol strictly: the server features reply now lists its host the way the ' +
-  'protocol specifies, and looking up a transaction by block position works ' +
-  'without the optional merkle flag. ' +
-  ' ' +
-  'Nothing changes for an existing index.'
+  'Rebuilt on version 3 of the StartOS packaging SDK, which needs StartOS ' +
+  '0.4.0.2. Nothing you have set changes.'
 
 export const current = VersionInfo.of({
-  version: '0.11.1:44',
+  version: '0.11.1:45',
   releaseNotes: {
     en_US: notes,
     es_ES: notes,
@@ -38,8 +14,7 @@ export const current = VersionInfo.of({
     fr_FR: notes,
   },
   migrations: {
-    // Nothing to migrate. Reindex acts only when its action is run, and an
-    // existing index is kept exactly as it was.
+    // Nothing to migrate: the SDK changed, and nothing on disk does.
     up: async ({ effects }) => {},
     down: IMPOSSIBLE,
   },
