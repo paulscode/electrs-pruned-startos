@@ -147,8 +147,24 @@ export function isBackendId(v: unknown): v is BackendId {
  * pre-release versions of themselves.
  */
 export const versionRange: Record<BackendId, string> = {
+  // The last term is for Retropex's BLAKE2b Knots package (Retropex/knots-startos,
+  // now Horizon-btc/knots-startos). It took the official `bitcoind` id, and its
+  // versions are flavored (`#knots:29.4.2:4`). A flavored version never matches
+  // an unflavored range, so it used to pass only through its `satisfies` list,
+  // which it dropped on 2026-09-04 (20ab287, "no longer satisfy core"). From
+  // then on it failed this range and nothing here changed to say so.
+  //
+  // Its layout still matches `officialEndpoints` and `officialHealthChecks`
+  // (checked at tag v29.4.2.knots20260508-1): `rpc` host on 8332, `peer-local`
+  // whitebind on 58334, cookie at the root of volume `main`, daemon `bitcoind`
+  // plus `sync-progress`. When pruned it pins stock btc-rpc-proxy v0.8.0, which
+  // has the witness fix but cannot parse a BLAKE2b block; see AGENTS.md.
+  //
+  // Checked with the SDK's comparator:
+  //   #knots:29.4.2:4 vs this range => true (false without the last term)
+  //   #knots:29.4.1:7 vs this range => false (its satisfies-less predecessor)
   bitcoind:
-    '(>=28.4:17 && <29) || (>=29.4:4 && <30) || (>=30.3:4 && <31) || >=31.1:4',
+    '(>=28.4:17 && <29) || (>=29.4:4 && <30) || (>=30.3:4 && <31) || >=31.1:4 || >=#knots:29.4.2:4',
   // MATCHED THROUGH `satisfies`, NOT DIRECTLY. That package's versions are
   // flavored (`#knotsprerdts:29.3:N`) and a flavored version never satisfies an
   // unflavored range, so this range does not match its version at all. It

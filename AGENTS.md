@@ -98,9 +98,14 @@ still applies; read the upstream repo's notes too when touching shared code.
   164-byte headers, BLAKE2b block identity, and a replacement for `bsl::Block::visit`, which reads
   the transaction count from a hardcoded offset 80 and silently indexes a v2 block as empty. Pick
   the BLAKE2b node in Select Node: `Bitcoin Knots (BLAKE2b) Companion` for our own package, or
-  `Bitcoin Knots` when a BLAKE2b build has been sideloaded over the official `bitcoind` (which is
-  what Retropex's `knots-startos` release does, taking the `bitcoind` id and keeping the official
-  hosts and ports).
+  `Bitcoin Knots` when a BLAKE2b build has been sideloaded over the official `bitcoind`. That is
+  what Retropex's `knots-startos` release does (now `Horizon-btc/knots-startos`): it takes the
+  `bitcoind` id and keeps the official hosts, ports, volume and health check ids. Its versions are
+  flavored (`#knots:29.4.2:4`) and it dropped its `satisfies` list on 2026-09-04, so it passes the
+  `bitcoind` range in `backends.ts` only through that range's explicit `>=#knots:29.4.2:4` term,
+  added in 0.11.1:46. Before that it failed the range, and older Retropex releases still do
+  (`#knots:29.4.1:7` has no `satisfies` list and sits below the term): the user has to update the
+  node. If Retropex moves to a different flavor, the term has to follow it.
 - **A stock proxy breaks on a v2 block now, not when the pruned window turns over.** An earlier
   version of this note said the two composed until the retained window filled with v2 blocks, and
   put that roughly four months past the 2026-08-30 activation. That was wrong, and it is why this
@@ -122,8 +127,13 @@ still applies; read the upstream repo's notes too when touching shared code.
 
   Fixed by **`paulscode/btc-rpc-proxy:v0.8.0-blake2b.1`**, built from PR #33
   (`feat/serve-v2-blocks`), which parses a block as `AnyHeader` so verbosity 1 and
-  `getrawtransaction` work on either header length. Retropex's node still ships a proxy binary with
-  no BLAKE2b support, so a user pointed at that node has the gap regardless of what we ship.
+  `getrawtransaction` work on either header length. Retropex's node pins stock
+  `ghcr.io/start9labs/btc-rpc-proxy:v0.8.0` (checked at `v29.4.2.knots20260508-1`, its
+  `#knots:29.4.2:4` release) and runs it only when pruned. That has the v0.6.0 witness fix but no
+  BLAKE2b support, since PR #33 is unmerged and in no upstream tag, and it predates v0.8.1's
+  cookie-following fix. So a **pruned** Retropex node has the gap regardless of what we ship: every
+  verbose call on a v2 block fails, and so does fetching a pruned v2 block from peers, which stalls
+  indexing below the prune height. An archival Retropex node runs no proxy and is unaffected.
 - **Patches 0002 and 0003 have regtest coverage that lives elsewhere** — the harness in
   [paulscode/electrs-pruned](https://github.com/paulscode/electrs-pruned) (`spikes/harness/`). Run
   `query.py` and `failure_modes.sh` there after any submodule bump. `--fuzz=0` catches context drift;
