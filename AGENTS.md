@@ -88,12 +88,13 @@ still applies; read the upstream repo's notes too when touching shared code.
   StartOS does not run "Sync Progress" until that check passes; Sync Progress says it too if the
   node vanishes mid-run. Keep "waiting for the node" and "electrs exited" apart: the old shared
   message is what got a healthy setup reported as unstable.
-- **Do not use the SDK's `checkPortListening`.** It matches any socket on the port in any state,
-  so an electrs that just exited still looks listening for about a minute through the TIME_WAIT
-  connections it left. Confirmed against the SDK's own `containsAddress`. `listening.ts` checks for
-  state `0A`. Found on the test server, not by reading. The fix is proposed upstream as
-  [Start9Labs/start-technologies#4091](https://github.com/Start9Labs/start-technologies/pull/4091);
-  retire `listening.ts` only once it ships in the SDK version this package pins.
+- **"Listening" must mean TCP state `LISTEN`.** An electrs that just exited leaves its wallets'
+  connections in TIME_WAIT for about a minute, and a check that matches any socket on the port
+  reads that as listening. Found on the test server, not by reading. A local `listening.ts` did the
+  LISTEN-only check until the fix, this package's
+  [Start9Labs/start-technologies#4091](https://github.com/Start9Labs/start-technologies/pull/4091),
+  shipped in start-sdk 3.0.4; `main.ts` now uses the SDK's `checkPortListening` through
+  `electrsListening`. Do not pin an SDK older than 3.0.4.
 - **This package can index a BLAKE2b chain.** Patches `0004`-`0006` carry the header-v2 support:
   164-byte headers, BLAKE2b block identity, and a replacement for `bsl::Block::visit`, which reads
   the transaction count from a hardcoded offset 80 and silently indexes a v2 block as empty. Pick

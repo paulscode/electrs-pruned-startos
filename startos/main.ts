@@ -8,13 +8,34 @@ import { storeJson } from './fileModels/store.json'
 import { i18n } from './i18n'
 import { sdk } from './sdk'
 import { bitcoindBridge, port, reindexRequest } from './utils'
-import { isListening } from './listening'
 
 export const main = sdk.setupMain(async ({ effects }) => {
   /**
    * ======================== Setup (optional) ========================
    */
   console.info(i18n('Starting Electrs!'))
+
+  /**
+   * Whether electrs has a socket in state LISTEN on the Electrum port.
+   *
+   * The SDK's check counts a TCP socket only in LISTEN since 3.0.4
+   * (Start9Labs/start-technologies#4091, which came from this package). Before
+   * that it matched any state, so for about a minute after electrs exited the
+   * TIME_WAIT connections its wallets left behind read as listening; a local
+   * `listening.ts` did the LISTEN-only check until the fix shipped.
+   *
+   * electrs binds 0.0.0.0, which the SDK reads from /proc/net/tcp. A read error
+   * counts as not listening, as it did in `listening.ts`, rather than throwing.
+   */
+  const electrsListening = async () =>
+    (
+      await sdk.healthCheck
+        .checkPortListening(effects, port, {
+          successMessage: '',
+          errorMessage: '',
+        })
+        .catch(() => null)
+    )?.result === 'success'
 
   let syncNotified =
     (await storeJson.read((s) => s.syncNotified).once()) ?? false
@@ -469,10 +490,10 @@ exec electrs`,
           // throughout that wait; a not-listening result just means electrs hasn't
           // bound the socket yet — it's still starting, not blocked on bitcoind.
           //
-          // `isListening` rather than the SDK's `checkPortListening`, which counts any socket on
-          // the port in any state: the TIME_WAIT connections left by an electrs that just exited
-          // made this report ready while electrs was still waiting for the node. See listening.ts.
-          if (await isListening(port)) {
+          // Only a LISTEN socket counts (see electrsListening): the TIME_WAIT connections left by
+          // an electrs that just exited once made this report ready while electrs was still
+          // waiting for the node.
+          if (await electrsListening()) {
             return {
               result: 'success',
               message: i18n(
@@ -574,10 +595,10 @@ printf '%s' "$line"`
           // it lasted. electrs binds its listener before anything else, so no listener means it
           // is not up, and a listener that will not answer is the busy case below.
           //
-          // A real LISTEN check, not the SDK's `checkPortListening`: that one counts the
-          // TIME_WAIT connections an exited electrs leaves behind, and on a live server it said
-          // "busy indexing" 34 seconds after electrs had died. See listening.ts.
-          if (!(await isListening(port))) {
+          // Only a LISTEN socket counts (see electrsListening): counting the TIME_WAIT
+          // connections an exited electrs leaves behind once made this say "busy indexing" on a
+          // live server 34 seconds after electrs had died.
+          if (!(await electrsListening())) {
             return {
               message: i18n(
                 'Electrs is not running. It exited and is being restarted; if this persists, check the logs.',
