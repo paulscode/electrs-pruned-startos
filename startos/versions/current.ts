@@ -4,7 +4,9 @@ const notes =
   'Rebuilt on version 3 of the StartOS packaging SDK, which needs StartOS ' +
   '0.4.0.2. Nothing you have set changes. ' +
   "Retropex's BLAKE2b Knots package, version 29.4.2:4 or later, is accepted " +
-  'as the Bitcoin dependency again. ' +
+  'as the Bitcoin dependency again. Use it unpruned: when pruned, its RPC ' +
+  'proxy cannot read BLAKE2b blocks, so indexing stalls below the prune ' +
+  'height. The Bitcoin Knots (BLAKE2b) Companion works pruned. ' +
   'Restarting the service while it is still starting no longer leaves the ' +
   'old electrs process running.'
 

@@ -18,7 +18,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
   /**
    * Whether electrs has a socket in state LISTEN on the Electrum port.
    *
-   * The SDK's check counts a TCP socket only in LISTEN since 3.0.4
+   * The SDK's check counts a TCP socket only in LISTEN since 3.0.0
    * (Start9Labs/start-technologies#4091, which came from this package). Before
    * that it matched any state, so for about a minute after electrs exited the
    * TIME_WAIT connections its wallets left behind read as listening; a local
@@ -33,6 +33,9 @@ export const main = sdk.setupMain(async ({ effects }) => {
         .checkPortListening(effects, port, {
           successMessage: '',
           errorMessage: '',
+          // The SDK gives up after 1 s by default; listening.ts never timed
+          // out, and a slow /proc read under heavy I/O is not electrs exiting.
+          timeout: 5_000,
         })
         .catch(() => null)
     )?.result === 'success'
@@ -378,8 +381,9 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
   const group = (n: number) => n.toLocaleString(groupLocale)
 
-  // `params` holds strings only, because it is handed to i18n, and SDK 2.0.9's i18n throws a
-  // RangeError on a number parameter. `behind` is the number, kept beside it.
+  // `params` holds strings only, formatted here with the server's grouping (SDK 2.0.9's i18n
+  // threw on a number parameter; 3.x does not, but this formatting is ours). `behind` is the
+  // number, kept beside it.
   const readProgress = async (): Promise<{
     params: { indexed: string; total: string; percent: string }
     behind: number

@@ -93,8 +93,8 @@ still applies; read the upstream repo's notes too when touching shared code.
   reads that as listening. Found on the test server, not by reading. A local `listening.ts` did the
   LISTEN-only check until the fix, this package's
   [Start9Labs/start-technologies#4091](https://github.com/Start9Labs/start-technologies/pull/4091),
-  shipped in start-sdk 3.0.4; `main.ts` now uses the SDK's `checkPortListening` through
-  `electrsListening`. Do not pin an SDK older than 3.0.4.
+  shipped in start-sdk 3.0.0; `main.ts` now uses the SDK's `checkPortListening` through
+  `electrsListening`. Do not pin an SDK older than 3.0.0.
 - **This package can index a BLAKE2b chain.** Patches `0004`-`0006` carry the header-v2 support:
   164-byte headers, BLAKE2b block identity, and a replacement for `bsl::Block::visit`, which reads
   the transaction count from a hardcoded offset 80 and silently indexes a v2 block as empty. Pick
