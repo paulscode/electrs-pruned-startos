@@ -165,20 +165,19 @@ export const versionRange: Record<BackendId, string> = {
   //   #knots:29.4.1:7 vs this range => false (its satisfies-less predecessor)
   bitcoind:
     '(>=28.4:17 && <29) || (>=29.4:4 && <30) || (>=30.3:4 && <31) || >=31.1:4 || >=#knots:29.4.2:4',
-  // MATCHED THROUGH `satisfies`, NOT DIRECTLY. That package's versions are
-  // flavored (`#knotsprerdts:29.3:N`) and a flavored version never satisfies an
-  // unflavored range, so this range does not match its version at all. It
-  // matches the `29.4:13` entry on that package's own `satisfies` list, which is
-  // how a flavored package declares the unflavored versions it stands in for.
+  // Flavored first, so the gate no longer depends on that package's `satisfies`
+  // list. Its versions are `#knotsprerdts:X:N`, and a flavored version never
+  // satisfies an unflavored range: `>=29.4:6` alone matched only through the
+  // `29.4:13` entry every 29.3 revision declared. The 31.1 line (31.1:0, the
+  // first release on the Bitcoin Knots SHA256 base) declares no `satisfies` at
+  // all, so it failed that gate. 29.3:24 is the first version under this
+  // flavor; the unflavored term is kept so nothing accepted before is refused.
   //
-  // Checked with the SDK's comparator rather than reasoned about:
-  //   #knotsprerdts:29.3:27 vs >=29.4:6  => false
-  //   29.4:13               vs >=29.4:6  => true
-  //
-  // So this gate is only as stable as that list. If that package ever drops or
-  // lowers its `satisfies('29.4:13')`, this stops matching and nothing here
-  // changes to say so.
-  'knots-prerdts': '>=29.4:6',
+  // Checked with the SDK's comparator:
+  //   #knotsprerdts:29.3:24, :31     => true
+  //   #knotsprerdts:31.1:0 (no satisfies), 31.1:1, 31.2:0 => true
+  //   #knotsprerdts:31.1:0 vs >=29.4:6 alone => false
+  'knots-prerdts': '>=#knotsprerdts:29.3:24 || >=29.4:6',
   // The release that added the whitelisted `peer-local` listener. Without it
   // electrs's p2p connection earns no permissions and is dropped the first time
   // it asks for an old block, which ends the process.

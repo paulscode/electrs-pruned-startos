@@ -1,6 +1,10 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 const notes =
+  'Accepts the Bitcoin Knots (SHA256) Companion on its new 31.1 versions, ' +
+  'which the previous release refused as an unmet dependency. Earlier ' +
+  'versions of that node are still accepted. ' +
+  'From 0.11.1:46: ' +
   'Rebuilt on version 3 of the StartOS packaging SDK, which needs StartOS ' +
   '0.4.0.2. Nothing you have set changes. ' +
   "Retropex's BLAKE2b Knots package, version 29.4.2:4 or later, is accepted " +
@@ -11,7 +15,7 @@ const notes =
   'old electrs process running.'
 
 export const current = VersionInfo.of({
-  version: '0.11.1:46',
+  version: '0.11.1:47',
   releaseNotes: {
     en_US: notes,
     es_ES: notes,
