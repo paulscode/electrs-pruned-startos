@@ -1,0 +1,175 @@
+From a7a1f578051f1602d6a12203370f61abea3f4f48 Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Tue, 27 Oct 2026 14:00:56 -0500
+Subject: [PATCH] p2p: advertise NODE_BLAKE2B when the node does
+
+Knots 29.4.3 hides every block past the chain split from a peer that
+does not advertise NODE_BLAKE2B (knots 18430434ab): headers and blocks
+stop at 961631, the last block both chains share, and whitelist
+permissions do not exempt a peer. electrs advertised no services, so
+against a 29.4.3 BLAKE2b node it stopped indexing at the first block it
+lacked, while its RPC side kept answering.
+
+Read the node's own localservices from getnetworkinfo, which electrs
+already calls at startup, and advertise NODE_BLAKE2B exactly when the
+node does. A SHA256 node sees NONE, as before.
+---
+ src/daemon.rs | 47 ++++++++++++++++++++++++++++++++++++++++++++++-
+ src/p2p.rs    | 34 +++++++++++++++++++++++++++++-----
+ 2 files changed, 75 insertions(+), 6 deletions(-)
+
+diff --git a/src/daemon.rs b/src/daemon.rs
+index 2166bd7..d469a04 100644
+--- a/src/daemon.rs
++++ b/src/daemon.rs
+@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
+ 
+ use bitcoin::consensus::encode::serialize_hex;
+ use bitcoin::{consensus::deserialize, hashes::hex::FromHex};
+-use bitcoin::{Amount, BlockHash, Transaction, Txid};
++use bitcoin::{p2p, Amount, BlockHash, Transaction, Txid};
+ use bitcoincore_rpc::{json, jsonrpc, Auth, Client, RpcApi};
+ use crossbeam_channel::Receiver;
+ use parking_lot::Mutex;
+@@ -52,6 +52,26 @@ pub(crate) struct BlockchainInfo {
+     pub prune_height: Option<u64>,
+ }
+ 
++/// NODE_BLAKE2B, the service bit a BLAKE2b-chain Knots node advertises (protocol.h).
++const NODE_BLAKE2B: u64 = 1 << 28;
++
++/// The services electrs advertises to the node over p2p: NODE_BLAKE2B if the node's own
++/// `localservices` (a hex string from `getnetworkinfo`) carries it, and nothing otherwise, as
++/// upstream does. An unparseable value falls back to nothing rather than failing startup.
++fn p2p_services(local_services: &str) -> p2p::ServiceFlags {
++    match u64::from_str_radix(local_services.trim_start_matches("0x"), 16) {
++        Ok(local) if local & NODE_BLAKE2B != 0 => p2p::ServiceFlags::from(NODE_BLAKE2B),
++        Ok(_) => p2p::ServiceFlags::NONE,
++        Err(e) => {
++            warn!(
++                "could not read the node's localservices {:?}: {}",
++                local_services, e
++            );
++            p2p::ServiceFlags::NONE
++        }
++    }
++}
++
+ /// `getblockchaininfo`, tolerant of a missing `difficulty`. See [`BlockchainInfo`].
+ fn get_blockchain_info(client: &Client) -> bitcoincore_rpc::Result<BlockchainInfo> {
+     client.call::<BlockchainInfo>("getblockchaininfo", &[])
+@@ -660,10 +680,21 @@ impl Daemon {
+             },
+         };
+ 
++        // Knots 29.4.3 hides every block past the chain split from a peer that does not
++        // advertise NODE_BLAKE2B (knots 18430434ab, "Hide (approaching) BLAKE2b blocks from stale
++        // peers"): headers and blocks stop at 961631, the last block both chains share. Whitelist
++        // permissions do not exempt a peer, so electrs, which advertised no services at all,
++        // stopped indexing at the first block it lacked. Advertise the bit exactly when the node
++        // itself does, so a BLAKE2b node serves us and a SHA256 node sees the same NONE as before.
++        let services = p2p_services(&network_info.local_services);
++        if services != p2p::ServiceFlags::NONE {
++            info!("the node advertises NODE_BLAKE2B, so the p2p connection does too");
++        }
+         let p2p = Mutex::new(Connection::connect(
+             config.daemon_p2p_addr,
+             metrics,
+             config.magic,
++            services,
+         )?);
+         Ok(Self {
+             p2p,
+@@ -1164,6 +1195,20 @@ where
+ 
+ #[cfg(test)]
+ mod tests {
++    /// The `localservices` values the two chains' nodes report: Knots on the BLAKE2b chain sets
++    /// NODE_BLAKE2B (1 << 28) beside NETWORK, WITNESS and NETWORK_LIMITED; a SHA256 node does not.
++    #[test]
++    fn p2p_services_mirrors_the_nodes_blake2b_bit() {
++        use super::{p2p, p2p_services};
++        assert_eq!(
++            p2p_services("0000000010000c09"),
++            p2p::ServiceFlags::from(1 << 28)
++        );
++        assert_eq!(p2p_services("0000000000000c09"), p2p::ServiceFlags::NONE);
++        assert_eq!(p2p_services("0000000000000000"), p2p::ServiceFlags::NONE);
++        assert_eq!(p2p_services("not hex"), p2p::ServiceFlags::NONE);
++    }
++
+     use super::{BlockHeaderHeight, BlockTxids, BlockchainInfo};
+ 
+     /// A Knots node on a BLAKE2b chain omits `difficulty` entirely (knots#420). Deserializing
+diff --git a/src/p2p.rs b/src/p2p.rs
+index edf16bc..62dbaf9 100644
+--- a/src/p2p.rs
++++ b/src/p2p.rs
+@@ -135,7 +135,14 @@ impl Connection {
+         self.new_block_recv.clone()
+     }
+ 
+-    pub(crate) fn connect(address: SocketAddr, metrics: &Metrics, magic: Magic) -> Result<Self> {
++    /// `services` is what electrs advertises in its `version` message; see
++    /// `Daemon::connect` for why it is not always `NONE`.
++    pub(crate) fn connect(
++        address: SocketAddr,
++        metrics: &Metrics,
++        magic: Magic,
++        services: p2p::ServiceFlags,
++    ) -> Result<Self> {
+         let recv_conn = TcpStream::connect(address)
+             .with_context(|| format!("p2p failed to connect: {:?}", address))?;
+         let mut send_conn = recv_conn
+@@ -243,7 +250,7 @@ impl Connection {
+         let (new_block_send, new_block_recv) = bounded::<()>(0);
+         let (init_send, init_recv) = bounded::<()>(0);
+ 
+-        tx_send.send(build_version_message())?;
++        tx_send.send(build_version_message(services))?;
+ 
+         crate::thread::spawn("p2p_loop", move || loop {
+             select! {
+@@ -315,15 +322,13 @@ impl Connection {
+     }
+ }
+ 
+-fn build_version_message() -> NetworkMessage {
++fn build_version_message(services: p2p::ServiceFlags) -> NetworkMessage {
+     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
+     let timestamp = SystemTime::now()
+         .duration_since(UNIX_EPOCH)
+         .expect("Time error")
+         .as_secs() as i64;
+ 
+-    let services = p2p::ServiceFlags::NONE;
+-
+     NetworkMessage::Version(message_network::VersionMessage {
+         version: p2p::PROTOCOL_VERSION,
+         services,
+@@ -418,3 +423,22 @@ pub fn duration_to_seconds(d: Duration) -> f64 {
+     let nanos = f64::from(d.subsec_nanos()) / 1e9;
+     d.as_secs() as f64 + nanos
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn version_message_advertises_the_services_it_is_given() {
++        for services in [p2p::ServiceFlags::NONE, p2p::ServiceFlags::from(1 << 28)] {
++            match build_version_message(services) {
++                NetworkMessage::Version(v) => {
++                    assert_eq!(v.services, services);
++                    assert_eq!(v.sender.services, services);
++                    assert_eq!(v.receiver.services, services);
++                }
++                other => panic!("expected a version message, got {:?}", other),
++            }
++        }
++    }
++}
+-- 
+2.43.0
+

@@ -344,10 +344,26 @@ rather than 0.12's header iterator.
 
 **Retire when:** as `0017`.
 
+## 0019 — advertise `NODE_BLAKE2B` when the node does
+
+Bitcoin Knots 29.4.3 hides every block past the chain split from a peer that does not advertise
+`NODE_BLAKE2B` (`1 << 28`; knots 18430434ab, "Hide (approaching) BLAKE2b blocks from stale peers"):
+headers and blocks stop at 961631, the last block both chains share. Whitelist permissions do not
+exempt a peer; the check reads only the services the peer advertised. electrs advertised none, so
+against a 29.4.3 BLAKE2b node it stopped indexing at the first block it lacked while its RPC side kept
+answering. Found on the test server the moment its node moved to 29.4.3: the node had received 72 KB
+of requests from electrs and sent back 2 KB.
+
+electrs now reads the node's own `localservices` from `getnetworkinfo`, which it already calls at
+startup, and advertises `NODE_BLAKE2B` exactly when the node does. A SHA256 node advertises no such
+bit and sees `NONE`, as before, so nothing changes there.
+
+**Retire when:** never, while this fork indexes a BLAKE2b chain; upstream electrs has no BLAKE2b.
+
 ## What has tests, and what does not
 
 Each patch carries its own, and every patch in the set builds and passes standalone — 50 tests at
-`0012`, 55 at `0013`, 60 at `0014`, 68 at `0015`, 74 at `0016`, 75 at `0017`, 77 at `0018`. The ones worth knowing about:
+`0012`, 55 at `0013`, 60 at `0014`, 68 at `0015`, 74 at `0016`, 75 at `0017`, 77 at `0018`, 79 at `0019`. The ones worth knowing about:
 
 | area | covered by |
 | --- | --- |
