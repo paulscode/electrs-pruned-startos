@@ -3,6 +3,7 @@ import { existsSync } from 'fs'
 import { rm } from 'fs/promises'
 import { manifest } from 'bitcoin-core-startos/startos/manifest'
 import { backends, defaultBackend, backendIds } from './backends'
+import { bounded, unanswered } from './boundedCheck'
 import { tomlFile } from './fileModels/electrs.toml'
 import { storeJson } from './fileModels/store.json'
 import { i18n } from './i18n'
@@ -486,7 +487,7 @@ exec electrs`,
       },
       ready: {
         display: i18n('Electrum Server'),
-        fn: async () => {
+        fn: bounded(async () => {
           // A LISTEN socket on the Electrum port appears as soon as electrs
           // binds it, which it does at startup BEFORE
           // blocking on the bitcoind IBD wait (electrs/src/server.rs binds the
@@ -513,14 +514,14 @@ exec electrs`,
               ? i18n('Electrum server is starting')
               : waitingForNode(),
           }
-        },
+        }, unanswered),
       },
       requires: [],
     })
     .addHealthCheck('sync', {
       ready: {
         display: i18n('Sync Progress'),
-        fn: async () => {
+        fn: bounded(async () => {
           // Probe electrs's Electrum RPC with server.banner. Until the index is
           // ready, electrs replies with {"code": -32603, "message": "unavailable
           // index"} — but far more often during a build it does not reply at all
@@ -638,7 +639,7 @@ printf '%s' "$line"`
                   ),
             result: 'loading',
           }
-        },
+        }, unanswered),
       },
       requires: ['electrs'],
     })

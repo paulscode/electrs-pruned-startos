@@ -56,6 +56,7 @@ const dict = {
   'Electrs is restarting. It deletes its index and builds it again from Bitcoin, which takes as long as a first index.': 56,
   'Electrs deletes its index and builds it again from Bitcoin the next time it starts.': 57,
   'Electrs is catching up: block ${indexed} of ${total} (${percent}%).': 58,
+  'This check has not finished after two minutes': 59,
 } as const
 
 /**

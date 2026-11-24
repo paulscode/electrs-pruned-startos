@@ -60,6 +60,7 @@ export default {
     56: 'Electrs se está reiniciando. Elimina su índice y lo construye de nuevo a partir de Bitcoin, lo que tarda lo mismo que un primer índice.',
     57: 'Electrs eliminará su índice y lo construirá de nuevo a partir de Bitcoin la próxima vez que se inicie.',
     58: 'Electrs se está poniendo al día: bloque ${indexed} de ${total} (${percent}%).',
+    59: 'Esta comprobación no ha terminado después de dos minutos',
   },
   de_DE: {
     0: 'Starte Electrs!',
@@ -120,6 +121,7 @@ export default {
     56: 'Electrs wird neu gestartet. Es löscht seinen Index und baut ihn aus Bitcoin neu auf, was so lange dauert wie ein erster Index.',
     57: 'Electrs löscht seinen Index beim nächsten Start und baut ihn aus Bitcoin neu auf.',
     58: 'Electrs holt auf: Block ${indexed} von ${total} (${percent}%).',
+    59: 'Diese Prüfung ist nach zwei Minuten noch nicht abgeschlossen',
   },
   pl_PL: {
     0: 'Uruchamianie Electrs!',
@@ -180,6 +182,7 @@ export default {
     56: 'Electrs uruchamia się ponownie. Usuwa swój indeks i buduje go od nowa z danych Bitcoina, co trwa tyle co pierwsze indeksowanie.',
     57: 'Electrs usunie swój indeks i zbuduje go od nowa z danych Bitcoina przy następnym uruchomieniu.',
     58: 'Electrs nadrabia zaległości: blok ${indexed} z ${total} (${percent}%).',
+    59: 'To sprawdzenie nie zakończyło się po dwóch minutach',
   },
   fr_FR: {
     0: "Démarrage d'Electrs !",
@@ -240,5 +243,6 @@ export default {
     56: "Electrs redémarre. Il supprime son index et le reconstruit à partir de Bitcoin, ce qui prend autant de temps qu'un premier index.",
     57: 'Electrs supprimera son index et le reconstruira à partir de Bitcoin au prochain démarrage.',
     58: 'Electrs rattrape son retard : bloc ${indexed} sur ${total} (${percent} %).',
+    59: "Cette vérification n'est pas terminée après deux minutes",
   },
 } satisfies Record<string, LangDict>
