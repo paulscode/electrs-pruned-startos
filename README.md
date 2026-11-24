@@ -225,7 +225,7 @@ Both numbers are clamped against each other. They are read a moment apart from t
 
 **Every param handed to `i18n` is a string, and that is load-bearing.** `i18n` formats a **number** param with `Intl.NumberFormat(process.env.LANG)`. StartOS runs services with `LANG=C.UTF-8`, which `Intl` rejects outright: `RangeError: Incorrect locale information provided`. In `0.11.1:34` these were the first number params in the package, nothing had ever reached that call, and the health check displayed that sentence where the progress should have been. The block counts are therefore grouped here — by the runtime's locale where `Intl` accepts it, falling back to `en-US` — and passed as strings. **Do not pass a raw number to `i18n` from this package.** The same trap is waiting in any package that has only ever used static keys.
 
-**Every run of both checks goes through `startos/boundedCheck.ts`.** start-sdk awaits a check's run with no limit, and a stop waits for every check before electrs is signalled, so one run that never returned (a subcontainer `exec` waiting on its mounts) would hold up Stop, updates and restarts, as it did in Bitcoin Knots (BLAKE2b) Companion before 29.5.0:1. A run still pending after two minutes is left behind: the check repeats its last result twice, then reads _This check has not finished after two minutes_ (`starting`, never `failure`). No second run starts while one is pending, and a run that finishes late is the next call's answer. The bound is two minutes rather than one because Sync Progress can legitimately take about 50 s once the index is built: three probes with a 10 s read timeout each, then the port, cookie and progress reads.
+**Every run of both checks goes through `bounded` in `startos/utils.ts`.** start-sdk awaits a check's run with no limit, and a stop waits for every check before electrs is signalled, so one run that never returned (a subcontainer `exec` waiting on its mounts) would hold up Stop, updates and restarts, as it did in Bitcoin Knots (BLAKE2b) Companion before 29.5.0:1. A run still pending after two minutes is left behind: the check repeats its last result twice, then reads _This check has not finished after two minutes_ (`starting`, never `failure`). No second run starts while one is pending, and a run that finishes late is the next call's answer. The bound is two minutes rather than one because Sync Progress can legitimately take about 50 s once the index is built: three probes with a 10 s read timeout each, then the port, cookie and progress reads.
 
 ## Backups and Restore
 
@@ -288,5 +288,5 @@ health_checks:
   - sync # displayed "Sync Progress"; positive confirmation only
   # both say "Waiting for <node> to start" while the node's cookie is absent; "Electrum Server" is the one seen
   # listening means TCP state LISTEN: the SDK's checkPortListening, LISTEN-only since start-sdk 3.0.0
-  # every run bounded at two minutes (boundedCheck.ts); unanswered reads as starting, never failure
+  # every run bounded at two minutes (`bounded` in utils.ts); unanswered reads as starting, never failure
 ```
